@@ -874,7 +874,9 @@ impl Workspace {
                         }
                         // Clear token on auth failures so next connect doesn't
                         // waste an RTT on a stale token.
-                        if let ConnectEvent::Failed { error } | ConnectEvent::ReconnectExhausted { error, .. } = &event {
+                        if let ConnectEvent::Failed { error }
+                        | ConnectEvent::ReconnectExhausted { error, .. } = &event
+                        {
                             if matches!(
                                 error,
                                 ConnectError::Unauthorized

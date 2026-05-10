@@ -1803,7 +1803,6 @@ async fn dispatch(
 
         ZedraMessage::SyncSession(msg) => {
             let session_token = session.issue_session_token(client_pubkey).await;
-            registry.save().await;
             let _ = msg
                 .tx
                 .send(build_sync_result(&session, &state, session_token).await)

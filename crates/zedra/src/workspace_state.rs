@@ -1,6 +1,5 @@
 use gpui::{Context, EventEmitter};
 use serde::{Deserialize, Serialize};
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use tracing::*;
@@ -154,7 +153,7 @@ pub struct WorkspaceState {
     pub docs_tree_collapsed_dirs: Vec<String>,
     pub created_at: u64,
     pub updated_at: u64,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_token: Option<Vec<u8>>,
 
     #[serde(skip)]
@@ -469,10 +468,7 @@ impl WorkspaceState {
     pub fn decode_session_token(&self) -> Option<[u8; 32]> {
         self.session_token.as_ref().and_then(|v| {
             if v.len() != 32 {
-                tracing::warn!(
-                    "session_token length={}, expected 32 — discarding",
-                    v.len()
-                );
+                tracing::warn!("session_token length={}, expected 32 — discarding", v.len());
                 return None;
             }
             let mut arr = [0u8; 32];
@@ -483,6 +479,9 @@ impl WorkspaceState {
 
     /// Persist a new session token after successful connect.
     pub fn save_session_token(&mut self, token: [u8; 32]) {
+        if self.session_token.as_deref() == Some(&token[..]) {
+            return;
+        }
         self.session_token = Some(token.to_vec());
         if let Err(e) = Self::upsert(self.clone()) {
             tracing::warn!("failed to persist session token: {e}");
@@ -521,7 +520,8 @@ impl WorkspaceStore {
             Some(p) => p,
             None => return Err("No data directory available".to_string()),
         };
-        let json = serde_json::to_string_pretty(self).map_err(|e| format!("Serialize error: {e}"))?;
+        let json =
+            serde_json::to_string_pretty(self).map_err(|e| format!("Serialize error: {e}"))?;
 
         // Atomic write: write to temp file with 0o600, then rename.
         // Prevents data loss if the process crashes mid-write.
@@ -529,6 +529,7 @@ impl WorkspaceStore {
         {
             #[cfg(unix)]
             {
+                use std::io::Write;
                 use std::os::unix::fs::OpenOptionsExt;
                 let mut f = std::fs::OpenOptions::new()
                     .write(true)
@@ -539,8 +540,7 @@ impl WorkspaceStore {
                     .map_err(|e| format!("Write error: {e}"))?;
                 f.write_all(json.as_bytes())
                     .map_err(|e| format!("Write error: {e}"))?;
-                f.sync_all()
-                    .map_err(|e| format!("Sync error: {e}"))?;
+                f.sync_all().map_err(|e| format!("Sync error: {e}"))?;
             }
             #[cfg(not(unix))]
             {
