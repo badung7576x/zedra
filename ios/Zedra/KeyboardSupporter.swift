@@ -1,33 +1,48 @@
 import UIKit
 
+@_silgen_name("zedra_ios_set_ctrl_state")
+private func zedra_ios_set_ctrl_state(_ state: UInt8)
+
+@_silgen_name("zedra_ios_get_ctrl_state")
+private func zedra_ios_get_ctrl_state() -> UInt8
+
 @objcMembers
 final class KeyboardSupporter: NSObject {
     private struct KeySpec {
         let label: String
         let key: String
         let repeats: Bool
+        let isModifier: Bool
     }
 
     private let keySpecs = [
-        KeySpec(label: "Esc", key: "escape", repeats: false),
-        KeySpec(label: "Tab", key: "tab", repeats: false),
-        KeySpec(label: "←", key: "left", repeats: true),
-        KeySpec(label: "↓", key: "down", repeats: true),
-        KeySpec(label: "↑", key: "up", repeats: true),
-        KeySpec(label: "→", key: "right", repeats: true),
-        KeySpec(label: "⏎", key: "enter", repeats: false),
+        KeySpec(label: "Ctrl", key: "ctrl", repeats: false, isModifier: true),
+        KeySpec(label: "Esc", key: "escape", repeats: false, isModifier: false),
+        KeySpec(label: "Tab", key: "tab", repeats: false, isModifier: false),
+        KeySpec(label: "←", key: "left", repeats: true, isModifier: false),
+        KeySpec(label: "↓", key: "down", repeats: true, isModifier: false),
+        KeySpec(label: "↑", key: "up", repeats: true, isModifier: false),
+        KeySpec(label: "→", key: "right", repeats: true, isModifier: false),
+        KeySpec(label: "⏎", key: "enter", repeats: false, isModifier: false),
     ]
 
     private let repeatInitialDelay: TimeInterval = 0.35
     private let repeatInterval: TimeInterval = 0.06
+    private let modifierTimeout: TimeInterval = 2.0
 
     private(set) var accessoryView: UIView?
     private var sendKey: ((String) -> Void)?
     private var repeatTimer: Timer?
     private var repeatingKey: String?
 
+    private var ctrlActive = false
+    private var ctrlLocked = false
+    private var deactivationTimer: Timer?
+    private var ctrlButton: UIButton?
+
     func makeAccessoryView(width: CGFloat, sendKey: @escaping (String) -> Void) -> UIView {
         stopRepeating()
+        deactivateCtrl()
         self.sendKey = sendKey
 
         let height: CGFloat = 44.0
@@ -61,16 +76,22 @@ final class KeyboardSupporter: NSObject {
             button.addTarget(self, action: #selector(stopRepeating), for: .touchCancel)
             button.addTarget(self, action: #selector(stopRepeating), for: .touchDragExit)
             bar.addSubview(button)
+            if spec.isModifier {
+                ctrlButton = button
+            }
         }
 
         accessoryView = bar
         return bar
     }
 
-    func stopRepeating() {
+    @objc func stopRepeating() {
         repeatTimer?.invalidate()
         repeatTimer = nil
         repeatingKey = nil
+        if ctrlActive && !ctrlLocked {
+            deactivateCtrl()
+        }
     }
 
     private func keySpec(for sender: UIButton) -> KeySpec? {
@@ -82,11 +103,18 @@ final class KeyboardSupporter: NSObject {
 
     @objc
     private func buttonTouchDown(_ sender: UIButton) {
-        guard let spec = keySpec(for: sender), spec.repeats else {
+        guard let spec = keySpec(for: sender) else { return }
+
+        if spec.isModifier {
+            handleModifierTap()
             return
         }
-        sendKey?(spec.key)
-        startRepeating(spec.key)
+
+        let keyToSend = compoundKey(spec.key)
+        if spec.repeats {
+            sendKey?(keyToSend)
+            startRepeating(keyToSend)
+        }
     }
 
     @objc
@@ -95,24 +123,101 @@ final class KeyboardSupporter: NSObject {
             stopRepeating()
             return
         }
+        if spec.isModifier { return }
 
         if spec.repeats {
             stopRepeating()
         } else {
-            sendKey?(spec.key)
+            sendKey?(compoundKey(spec.key))
+            if ctrlActive && !ctrlLocked {
+                deactivateCtrl()
+            }
         }
+    }
+
+    // MARK: - Ctrl modifier state
+
+    private func handleModifierTap() {
+        cancelDeactivationTimer()
+        if ctrlLocked {
+            deactivateCtrl()
+        } else if ctrlActive {
+            ctrlLocked = true
+            ctrlActive = false
+            syncCtrlStateToRust()
+            updateCtrlHighlight()
+        } else {
+            ctrlActive = true
+            syncCtrlStateToRust()
+            updateCtrlHighlight()
+            startDeactivationTimer()
+        }
+    }
+
+    private func deactivateCtrl() {
+        ctrlActive = false
+        ctrlLocked = false
+        cancelDeactivationTimer()
+        syncCtrlStateToRust()
+        updateCtrlHighlight()
+    }
+
+    private func updateCtrlHighlight() {
+        let active = ctrlActive || ctrlLocked
+        ctrlButton?.backgroundColor = active
+            ? UIColor.systemBlue.withAlphaComponent(0.3)
+            : .clear
+    }
+
+    // Polls at 150ms while one-shot is active to detect when Rust consumes
+    // the one-shot via native keyboard input. Also enforces the 2s timeout.
+    private func startDeactivationTimer() {
+        cancelDeactivationTimer()
+        let startTime = Date()
+        deactivationTimer = Timer.scheduledTimer(
+            withTimeInterval: 0.15,
+            repeats: true
+        ) { [weak self] _ in
+            guard let self else { return }
+            // Rust consumed the one-shot via native keyboard letter
+            if !self.ctrlLocked && zedra_ios_get_ctrl_state() == 0 {
+                self.deactivateCtrl()
+                return
+            }
+            // 2s timeout
+            if Date().timeIntervalSince(startTime) >= self.modifierTimeout {
+                self.deactivateCtrl()
+            }
+        }
+    }
+
+    private func cancelDeactivationTimer() {
+        deactivationTimer?.invalidate()
+        deactivationTimer = nil
+    }
+
+    private func syncCtrlStateToRust() {
+        let state: UInt8
+        if ctrlLocked {
+            state = 2
+        } else if ctrlActive {
+            state = 1
+        } else {
+            state = 0
+        }
+        zedra_ios_set_ctrl_state(state)
+    }
+
+    private func compoundKey(_ key: String) -> String {
+        (ctrlActive || ctrlLocked) ? "ctrl+\(key)" : key
     }
 
     private func startRepeating(_ key: String) {
         stopRepeating()
         repeatingKey = key
 
-        // Accessory arrow keys should behave like held hardware keys: one immediate
-        // keystroke, then repeat until UIKit reports any release or cancellation.
         let timer = Timer(timeInterval: repeatInterval, repeats: true) { [weak self] _ in
-            guard let self, self.repeatingKey == key else {
-                return
-            }
+            guard let self, self.repeatingKey == key else { return }
             self.sendKey?(key)
         }
         timer.fireDate = Date(timeIntervalSinceNow: repeatInitialDelay)

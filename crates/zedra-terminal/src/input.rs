@@ -1,10 +1,24 @@
 use std::ops::Range;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use gpui::*;
 use smallvec::SmallVec;
 
 use crate::selection::TerminalSelectionDocument;
 use crate::terminal::Terminal;
+
+// Ctrl modifier state shared with the iOS keyboard accessory bar via FFI.
+// 0 = inactive, 1 = one-shot (deactivates after first key), 2 = locked (sticky).
+static CTRL_INTERCEPT_STATE: AtomicU8 = AtomicU8::new(0);
+
+/// Called from Swift when the Ctrl modifier state changes on the keyboard accessory bar.
+pub fn set_ctrl_intercept_state(state: u8) {
+    CTRL_INTERCEPT_STATE.store(state, Ordering::Relaxed);
+}
+
+pub fn get_ctrl_intercept_state() -> u8 {
+    CTRL_INTERCEPT_STATE.load(Ordering::Relaxed)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TextInputPreflight {
@@ -611,6 +625,34 @@ impl InputHandler for TerminalInputHandler {
     }
 
     fn insert_text(&mut self, text: &str, _window: &mut Window, cx: &mut App) {
+        // iOS Ctrl modifier interception: when Ctrl is active from the keyboard
+        // accessory bar and the user types a single letter on the software keyboard,
+        // send the Ctrl+letter escape sequence instead of the character.
+        let ctrl_state = CTRL_INTERCEPT_STATE.load(Ordering::Relaxed);
+        if ctrl_state > 0 && text.len() == 1 {
+            if let Some(ch) = text.chars().next() {
+                if ch.is_ascii_alphabetic() {
+                    let key = ch.to_ascii_lowercase().to_string();
+                    let entity = self.entity.clone();
+                    let _ = entity.update(cx, |term, _| {
+                        term.handle_keystroke(&Keystroke {
+                            modifiers: Modifiers {
+                                control: true,
+                                ..Default::default()
+                            },
+                            key,
+                            key_char: None,
+                        });
+                    });
+                    // One-shot consumed — deactivate. Locked stays active.
+                    if ctrl_state == 1 {
+                        CTRL_INTERCEPT_STATE.store(0, Ordering::Relaxed);
+                    }
+                    return;
+                }
+            }
+        }
+
         let text = text.to_string();
         if self.clear_selection_for_text_input(cx) {
             if text.is_empty() {

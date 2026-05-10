@@ -370,8 +370,8 @@ void zedra_ios_native_notification_dismiss(uint32_t callback_id);
 /**
  * Called from the native keyboard accessory bar when a shortcut key button is tapped.
  *
- * `key` is one of: "escape", "tab", "left", "down", "up", "right", "enter", "shift_enter".
- * Maps the name to the corresponding terminal escape sequence and sends it via the active session.
+ * `key` is one of: "escape", "tab", "left", "down", "up", "right", "enter",
+ * "shift_enter", "dismiss_keyboard", or compound "ctrl+X" (e.g. "ctrl+c", "ctrl+left").
  */
 void zedra_ios_send_key_input(const char *key);
 
@@ -379,6 +379,18 @@ void zedra_ios_send_key_input(const char *key);
  * Called from the native terminal composer to send finalized text to the active terminal.
  */
 void zedra_ios_send_terminal_text(const char *text);
+
+/**
+ * Called from Swift when the Ctrl modifier state changes on the keyboard accessory bar.
+ *
+ * `state`: 0 = inactive, 1 = one-shot (deactivates after first key), 2 = locked (sticky).
+ */
+void zedra_ios_set_ctrl_state(uint8_t state);
+
+/**
+ * Returns the current Ctrl intercept state so Swift can detect when Rust consumed one-shot.
+ */
+uint8_t zedra_ios_get_ctrl_state(void);
 
 /**
  * Called from the native app delegate when the app is opened via a `zedra://` URL.
