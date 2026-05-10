@@ -4,8 +4,10 @@ pub mod keys;
 pub mod terminal;
 pub mod view;
 
+pub use alacritty_terminal::term::TermMode;
 pub use element::*;
 pub use input::*;
+pub use input::{get_ctrl_intercept_state, set_ctrl_intercept_state};
 pub use keys::*;
 pub use terminal::*;
 pub use view::*;

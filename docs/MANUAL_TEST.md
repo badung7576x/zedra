@@ -463,6 +463,52 @@ printf '\033]8;;file:///tmp/zedra-long-code.rs:1:1\033\\/tmp/zedra-long-code.rs:
 6. Keep the same terminal active, show the software keyboard again, then press `Tab`, `Enter`, and an arrow key in the accessory bar
 7. Expected: each key still reaches the PTY after reconnect; the accessory bar does not keep sending to a stale terminal channel
 
+## 11g. Keyboard Accessory Bar Ctrl Modifier On iOS
+
+1. Connect to a session on iPhone or iOS simulator and open the terminal view
+2. Tap the terminal so the software keyboard and accessory bar are visible
+3. Expected: the accessory bar shows 8 buttons: Ctrl, Esc, Tab, ←, ↓, ↑, →, ⏎
+
+**Ctrl modifier combos (type a letter from the iOS keyboard after tapping Ctrl):**
+4. Tap Ctrl once (one-shot), then type `c` on the iOS keyboard
+5. Expected: Ctrl button highlights blue, then `c` sends `\x03` (interrupts a running process); Ctrl highlight deactivates after the keypress
+6. Tap Ctrl once, then type `z` on the iOS keyboard
+7. Expected: sends `\x1a` (suspend)
+8. Tap Ctrl once, then type `d`
+9. Expected: sends `\x04` (EOF / logout)
+10. Tap Ctrl once, then type `l`
+11. Expected: sends `\x0c` (clear screen)
+12. Tap Ctrl once, then type `a`
+13. Expected: sends `\x01` (cursor to line start in readline)
+14. Tap Ctrl once, then type `e`
+15. Expected: sends `\x05` (cursor to line end)
+16. Tap Ctrl once, then type `w`
+17. Expected: sends `\x17` (delete word back)
+18. Tap Ctrl once, then type `r`
+19. Expected: sends `\x12` (reverse search)
+
+**Ctrl + toolbar arrow keys:**
+20. Tap Ctrl once, then tap ←
+21. Expected: sends `\x1b[1;5D` (word left)
+22. Tap Ctrl once, then tap →
+23. Expected: sends `\x1b[1;5C` (word right)
+
+**Sticky modifier UX:**
+24. Tap Ctrl once → Ctrl highlights blue, tap Esc → sends `ctrl+escape` (no-op expected), Ctrl deactivates
+25. Double-tap Ctrl (tap twice quickly) → Ctrl highlights blue and stays highlighted (locked)
+26. While locked, tap →, ←, ↑, ↓ in sequence
+27. Expected: each sends the corresponding Ctrl+arrow sequence without Ctrl deactivating between presses
+28. Tap the locked Ctrl button → Ctrl deactivates, highlight removes
+29. Tap Ctrl once and wait 2 seconds without pressing any key
+30. Expected: Ctrl auto-deactivates and highlight removes
+
+**Regression (Ctrl inactive):**
+31. Tap Esc → sends `\x1b`
+32. Tap Tab → sends `\x09`
+33. Tap → → sends `\x1b[C`
+34. Tap Enter → sends `\r`
+35. Press and hold ↑ → repeats normally
+
 ## 12. Quick Action Terminal Navigation
 
 1. Connect to a session with at least two open terminals
