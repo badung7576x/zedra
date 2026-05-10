@@ -682,8 +682,8 @@ impl SessionRegistry {
             let mut name_index = registry.name_index.lock().await;
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
 
             for ps in state.sessions {
                 let session = Arc::new(ServerSession::new(
