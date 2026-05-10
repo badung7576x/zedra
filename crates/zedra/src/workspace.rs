@@ -9,8 +9,8 @@ use tracing::*;
 use zedra_rpc::ZedraPairingTicket;
 use zedra_rpc::proto::{HostEvent, SyncSessionResult};
 use zedra_session::{
-    ConnectEvent, ConnectPhase, ConnectSnapshot, ReconnectReason, Session, SessionHandle,
-    SessionState, signer::ClientSigner,
+    ConnectError, ConnectEvent, ConnectPhase, ConnectSnapshot, ReconnectReason, Session,
+    SessionHandle, SessionState, signer::ClientSigner,
 };
 
 use crate::active_terminal;
@@ -832,6 +832,25 @@ impl Workspace {
                         }
                         if let ConnectEvent::SyncComplete { sync, .. } = &event {
                             ws.seed_terminal_meta_from_sync(sync, cx);
+                            ws.workspace_state.update(cx, |ws, _cx| {
+                                ws.save_session_token(sync.session_token);
+                            });
+                        }
+                        // Clear token on auth failures so next connect doesn't
+                        // waste an RTT on a stale token.
+                        if let ConnectEvent::Failed { error } | ConnectEvent::ReconnectExhausted { error, .. } = &event {
+                            if matches!(
+                                error,
+                                ConnectError::Unauthorized
+                                    | ConnectError::InvalidSignature
+                                    | ConnectError::HostSignatureInvalid
+                                    | ConnectError::NotInSessionAcl
+                                    | ConnectError::SessionNotFound
+                            ) {
+                                ws.workspace_state.update(cx, |ws, _cx| {
+                                    ws.clear_session_token();
+                                });
+                            }
                         }
                         sync_refresh_mode
                     }) {
@@ -932,13 +951,15 @@ impl Workspace {
         self.seen_reconnect = false;
         self.active_reconnect_reason = None;
         self.latency_sampler.reset();
-        self.start_connection(request);
+        let token = self.workspace_state.read(cx).decode_session_token();
+        self.start_connection(request, token);
 
         self.content.update(cx, |c, cx| c.show_connecting_view(cx));
     }
 
-    fn start_connection(&self, request: ConnectionRequest) {
+    fn start_connection(&self, request: ConnectionRequest, session_token: Option<[u8; 32]>) {
         let session_id = request.session_id.clone();
+        self.session.handle().set_session_token(session_token);
         self.session.connect(
             request.addr,
             request.ticket,
@@ -964,7 +985,8 @@ impl Workspace {
         self.seen_reconnect = false;
         self.active_reconnect_reason = None;
         self.latency_sampler.reset();
-        self.start_connection(request);
+        let token = self.workspace_state.read(cx).decode_session_token();
+        self.start_connection(request, token);
         self.content.update(cx, |c, cx| c.show_connecting_view(cx));
         self.record_current_view(cx);
     }
