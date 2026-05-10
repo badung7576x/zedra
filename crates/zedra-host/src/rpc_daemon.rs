@@ -1108,6 +1108,7 @@ async fn handle_connect(
                             previous.close_for_takeover();
                         }
                         let new_token = session.issue_session_token(pubkey).await;
+                        registry.save().await;
                         let sync = build_sync_result(session, state, new_token).await;
                         let _ = msg.tx.send(ConnectResult::Ok(sync)).await;
                         // Token fast-path: no challenge/prove round trip, prove_ms=0
@@ -1386,6 +1387,7 @@ async fn finish_auth(
                 anyhow::bail!("session {} vanished after attach", resolved_session_id);
             };
             let session_token = session.issue_session_token(client_pubkey).await;
+            registry.save().await;
             let sync = build_sync_result(&session, state, session_token).await;
             let _ = tx.send(AuthProveResult::Ok(sync)).await;
             Ok((
@@ -1801,6 +1803,7 @@ async fn dispatch(
 
         ZedraMessage::SyncSession(msg) => {
             let session_token = session.issue_session_token(client_pubkey).await;
+            registry.save().await;
             let _ = msg
                 .tx
                 .send(build_sync_result(&session, &state, session_token).await)

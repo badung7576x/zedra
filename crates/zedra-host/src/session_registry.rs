@@ -32,6 +32,9 @@ use zedra_rpc::verify_registration_hmac;
 
 pub const ONE_TIME_PAIRING_SLOT_TTL_SECS: u64 = 600;
 
+/// Session token time-to-live: 7 days.
+const TOKEN_TTL_SECS: u64 = 7 * 24 * 3600;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PairingSlotMode {
     OneTime,
@@ -291,6 +294,7 @@ pub struct ServerSession {
 #[derive(Clone)]
 pub struct SessionToken {
     pub token: [u8; 32],
+    pub issued_at: u64,
 }
 
 /// Max number of observed paths stored per session.
@@ -621,6 +625,14 @@ struct PersistedState {
     sessions: Vec<PersistedSession>,
 }
 
+/// Persisted session token with metadata.
+#[derive(Serialize, Deserialize)]
+struct PersistedToken {
+    token: [u8; 32],
+    client_pubkey: [u8; 32],
+    issued_at: u64,
+}
+
 #[derive(Serialize, Deserialize)]
 struct PersistedSession {
     id: String,
@@ -628,6 +640,8 @@ struct PersistedSession {
     workdir: Option<PathBuf>,
     /// Per-session authorized pubkeys.
     acl: Vec<[u8; 32]>,
+    #[serde(default)]
+    token: Option<PersistedToken>,
 }
 
 // ---------------------------------------------------------------------------
@@ -712,6 +726,10 @@ impl SessionRegistry {
         let session_count = {
             let mut sessions = registry.sessions.lock().await;
             let mut name_index = registry.name_index.lock().await;
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
 
             for ps in state.sessions {
                 let session = Arc::new(ServerSession::new(
@@ -725,6 +743,21 @@ impl SessionRegistry {
                     let mut acl = session.acl.lock().await;
                     for key in ps.acl {
                         acl.insert(key);
+                    }
+                }
+
+                // Restore persisted token (skip expired ones).
+                if let Some(pt) = ps.token {
+                    if now > pt.issued_at + TOKEN_TTL_SECS {
+                        tracing::info!("discarding expired token for session {}", ps.id);
+                    } else {
+                        *session.session_token.lock().await = Some((
+                            pt.client_pubkey,
+                            SessionToken {
+                                token: pt.token,
+                                issued_at: pt.issued_at,
+                            },
+                        ));
                     }
                 }
 
@@ -752,7 +785,7 @@ impl SessionRegistry {
     ///
     /// No-op if no storage path was configured. Errors are logged, not
     /// propagated — a save failure should never abort an RPC call.
-    async fn save(&self) {
+    pub async fn save(&self) {
         let Some(ref path) = self.storage_path else {
             return;
         };
@@ -771,17 +804,23 @@ impl SessionRegistry {
             let sessions = self.sessions.lock().await;
             for session in sessions.values() {
                 let acl: Vec<[u8; 32]> = session.acl.lock().await.iter().cloned().collect();
+                let token = session.session_token.lock().await.as_ref().map(|(pk, t)| PersistedToken {
+                    token: t.token,
+                    client_pubkey: *pk,
+                    issued_at: t.issued_at,
+                });
                 persisted_sessions.push(PersistedSession {
                     id: session.id.clone(),
                     name: session.name.clone(),
                     workdir: session.workdir.clone(),
                     acl,
+                    token,
                 });
             }
         }
 
         let state = PersistedState {
-            version: 1,
+            version: 2,
             authorized_clients,
             sessions: persisted_sessions,
         };
@@ -1314,13 +1353,21 @@ impl ServerSession {
     pub async fn issue_session_token(&self, client_pubkey: [u8; 32]) -> [u8; 32] {
         let mut token = [0u8; 32];
         rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut token);
-        *self.session_token.lock().await = Some((client_pubkey, SessionToken { token }));
+        let issued_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        *self.session_token.lock().await = Some((
+            client_pubkey,
+            SessionToken { token, issued_at },
+        ));
         token
     }
 
     /// Atomically consume the session token on validation.
     /// Returns `true` only if the token belongs to `client_pubkey` and matches.
     /// The slot is cleared on consumption to prevent replay.
+    /// Rejects tokens older than TOKEN_TTL_SECS.
     pub async fn validate_session_token(
         &self,
         client_pubkey: &[u8; 32],
@@ -1330,6 +1377,17 @@ impl ServerSession {
         let Some((stored_pubkey, entry)) = slot.take() else {
             return false;
         };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if now > entry.issued_at + TOKEN_TTL_SECS {
+            tracing::info!(
+                "rejecting expired session token (issued {}s ago)",
+                now - entry.issued_at
+            );
+            return false;
+        }
         if &stored_pubkey != client_pubkey {
             // Token belongs to a different client — put it back and reject.
             *slot = Some((stored_pubkey, entry));
