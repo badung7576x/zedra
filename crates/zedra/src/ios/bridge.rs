@@ -9,6 +9,10 @@ use crate::platform_bridge::{
     NativeNotificationOptions, PlatformBridge, SystemTheme,
 };
 
+use gpui::Keystroke;
+use zedra_terminal::TermMode;
+use zedra_terminal::keys::to_esc_str;
+
 /// Screen scale factor (e.g. 3.0 for @3x), stored as f32 bits.
 /// Default 3.0 covers most modern iPhones until Obj-C pushes the real value.
 static SCREEN_SCALE: AtomicU32 = AtomicU32::new(f32::to_bits(3.0));
@@ -595,8 +599,8 @@ pub extern "C" fn zedra_ios_native_notification_dismiss(callback_id: u32) {
 
 /// Called from the native keyboard accessory bar when a shortcut key button is tapped.
 ///
-/// `key` is one of: "escape", "tab", "left", "down", "up", "right", "enter", "shift_enter".
-/// Maps the name to the corresponding terminal escape sequence and sends it via the active session.
+/// `key` is one of: "escape", "tab", "left", "down", "up", "right", "enter",
+/// "shift_enter", "dismiss_keyboard", or compound "ctrl+X" (e.g. "ctrl+c", "ctrl+left").
 #[unsafe(no_mangle)]
 pub extern "C" fn zedra_ios_send_key_input(key: *const std::ffi::c_char) {
     if key.is_null() {
@@ -618,7 +622,35 @@ pub extern "C" fn zedra_ios_send_key_input(key: *const std::ffi::c_char) {
         return;
     }
 
-    active_terminal::send_named_key(key_name);
+    // Handle compound keys like "ctrl+c", "ctrl+left"
+    if let Some((modifier, key)) = key_name.split_once('+') {
+        if modifier == "ctrl" {
+            let mut modifiers = gpui::Modifiers::default();
+            modifiers.control = true;
+            let keystroke = Keystroke {
+                key: key.into(),
+                modifiers,
+                ..Default::default()
+            };
+            if let Some(esc_str) = to_esc_str(&keystroke, &TermMode::empty(), false) {
+                active_terminal::send_to_active(esc_str.as_bytes().to_vec());
+            }
+        }
+        return;
+    }
+
+    let bytes: &[u8] = match key_name {
+        "escape" => b"\x1b",
+        "tab" => b"\x09",
+        "left" => b"\x1b[D",
+        "down" => b"\x1b[B",
+        "up" => b"\x1b[A",
+        "right" => b"\x1b[C",
+        "enter" => b"\r",
+        "shift_enter" => b"\n",
+        _ => return,
+    };
+    active_terminal::send_to_active(bytes.to_vec());
 }
 
 /// Called from the native terminal composer to send finalized text to the active terminal.
@@ -640,6 +672,20 @@ pub extern "C" fn zedra_ios_send_terminal_text(text: *const std::ffi::c_char) {
     }
 
     active_terminal::send_to_active(text.as_bytes().to_vec());
+}
+
+/// Called from Swift when the Ctrl modifier state changes on the keyboard accessory bar.
+///
+/// `state`: 0 = inactive, 1 = one-shot (deactivates after first key), 2 = locked (sticky).
+#[unsafe(no_mangle)]
+pub extern "C" fn zedra_ios_set_ctrl_state(state: u8) {
+    zedra_terminal::set_ctrl_intercept_state(state);
+}
+
+/// Returns the current Ctrl intercept state so Swift can detect when Rust consumed one-shot.
+#[unsafe(no_mangle)]
+pub extern "C" fn zedra_ios_get_ctrl_state() -> u8 {
+    zedra_terminal::get_ctrl_intercept_state()
 }
 
 /// Called from the native app delegate when the app is opened via a `zedra://` URL.
