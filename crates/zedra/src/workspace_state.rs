@@ -484,13 +484,17 @@ impl WorkspaceState {
     /// Persist a new session token after successful connect.
     pub fn save_session_token(&mut self, token: [u8; 32]) {
         self.session_token = Some(token.to_vec());
-        Self::upsert(self.clone()).ok();
+        if let Err(e) = Self::upsert(self.clone()) {
+            tracing::warn!("failed to persist session token: {e}");
+        }
     }
 
     /// Clear stored session token after auth failure.
     pub fn clear_session_token(&mut self) {
         self.session_token = None;
-        Self::upsert(self.clone()).ok();
+        if let Err(e) = Self::upsert(self.clone()) {
+            tracing::warn!("failed to clear session token: {e}");
+        }
     }
 }
 
@@ -517,29 +521,37 @@ impl WorkspaceStore {
             Some(p) => p,
             None => return Err("No data directory available".to_string()),
         };
-        match serde_json::to_string_pretty(self) {
-            Ok(json) => {
-                let write_result = {
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::OpenOptionsExt;
-                        std::fs::OpenOptions::new()
-                            .write(true)
-                            .create(true)
-                            .truncate(true)
-                            .mode(0o600)
-                            .open(&path)
-                            .and_then(|mut f| f.write_all(json.as_bytes()))
-                    }
-                    #[cfg(not(unix))]
-                    {
-                        std::fs::write(&path, json.as_bytes())
-                    }
-                };
-                write_result.map_err(|e| format!("Write error: {e}"))
+        let json = serde_json::to_string_pretty(self).map_err(|e| format!("Serialize error: {e}"))?;
+
+        // Atomic write: write to temp file with 0o600, then rename.
+        // Prevents data loss if the process crashes mid-write.
+        let tmp_path = path.with_extension("json.tmp");
+        {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                let mut f = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .mode(0o600)
+                    .open(&tmp_path)
+                    .map_err(|e| format!("Write error: {e}"))?;
+                f.write_all(json.as_bytes())
+                    .map_err(|e| format!("Write error: {e}"))?;
+                f.sync_all()
+                    .map_err(|e| format!("Sync error: {e}"))?;
             }
-            Err(e) => Err(format!("Serialize error: {e}")),
+            #[cfg(not(unix))]
+            {
+                std::fs::write(&tmp_path, json.as_bytes())
+                    .map_err(|e| format!("Write error: {e}"))?;
+            }
         }
+        std::fs::rename(&tmp_path, &path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("Rename error: {e}")
+        })
     }
 
     fn upsert(&mut self, entry: WorkspaceState) -> Result<(), String> {
