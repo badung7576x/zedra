@@ -193,3 +193,41 @@ func zedra_set_collection_enabled(_ enabled: Int32) {
     Analytics.setAnalyticsCollectionEnabled(isEnabled)
     Crashlytics.crashlytics().setCrashlyticsCollectionEnabled(isEnabled)
 }
+
+// MARK: - Dynamic Island Live Activity
+
+@_cdecl("ios_update_coding_status")
+func ios_update_coding_status(
+    _ terminalId: UnsafePointer<CChar>?,
+    _ imageName: UnsafePointer<CChar>?,
+    _ displayName: UnsafePointer<CChar>?,
+    _ color: UnsafePointer<CChar>?,
+    _ running: Bool,
+    _ project: UnsafePointer<CChar>?,
+    _ isActive: Bool
+) {
+    guard #available(iOS 17.0, *) else {
+        return
+    }
+    let tid = NativePresentationBridge.string(terminalId) ?? ""
+    let img = NativePresentationBridge.string(imageName) ?? ""
+    let name = NativePresentationBridge.string(displayName) ?? ""
+    let col = NativePresentationBridge.string(color) ?? "#FFFFFF"
+    let proj = NativePresentationBridge.string(project) ?? ""
+    DispatchQueue.main.async {
+        LiveActivityManager.shared.update(
+            terminalId: tid, imageName: img, displayName: name,
+            color: col, running: running, project: proj, isActive: isActive
+        )
+    }
+}
+
+@_cdecl("ios_end_coding_status")
+func ios_end_coding_status() {
+    guard #available(iOS 17.0, *) else {
+        return
+    }
+    DispatchQueue.main.async {
+        LiveActivityManager.shared.end()
+    }
+}

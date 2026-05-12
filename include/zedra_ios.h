@@ -321,6 +321,22 @@ extern void ios_present_text_input(uint32_t callback_id,
                                    const char *initial_value);
 
 /**
+ * Update Dynamic Island coding status for a terminal.
+ */
+extern void ios_update_coding_status(const char *terminal_id,
+                                     const char *image_name,
+                                     const char *display_name,
+                                     const char *color,
+                                     bool running,
+                                     const char *project,
+                                     bool is_active);
+
+/**
+ * End the Dynamic Island Live Activity.
+ */
+extern void ios_end_coding_status(void);
+
+/**
  * Called from the native alert handler after the user taps a button.
  *
  * `callback_id` matches the value passed to `ios_present_alert`.

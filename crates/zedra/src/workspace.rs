@@ -1548,7 +1548,7 @@ impl Workspace {
         let previous_active_id = self.workspace_state.read(cx).active_terminal_id.clone();
         if previous_active_id.as_deref() != Some(id.as_str()) {
             if let Some(previous_terminal) =
-                previous_active_id.and_then(|active_id| self.terminal_by_id(&active_id, cx))
+                previous_active_id.as_ref().and_then(|active_id| self.terminal_by_id(active_id, cx))
             {
                 previous_terminal.update(cx, |terminal, cx| {
                     terminal.deactivate(cx);
@@ -1557,6 +1557,7 @@ impl Workspace {
         }
 
         let subtitle_id = id.clone();
+        let coding_id = id.clone();
         self.workspace_state.update(cx, |state, cx| {
             state.active_terminal_id = Some(id.clone());
             state.set_active_main_view(WorkspaceMainView::Terminal { id: id.clone() }, cx);
@@ -1569,6 +1570,39 @@ impl Workspace {
             c.hide_connecting_view(cx);
         });
         view_telemetry::record(view_telemetry::WORKSPACE_TERMINAL);
+
+        // Update Dynamic Island for terminal switch.
+        let project = self.workspace_state.read(cx).display_name().to_string();
+        let new_meta = self.terminal_state.read(cx).meta(&coding_id);
+        let (new_kind, new_running) = new_meta.live_activity_agent();
+        match new_kind {
+            Some(kind) if new_running => {
+                platform_bridge::update_coding_status(
+                    &coding_id, kind.native_image_name().unwrap_or(""), kind.display_name(),
+                    kind.native_color().unwrap_or("#FFFFFF"), true, &project, true,
+                );
+            }
+            _ => {
+                platform_bridge::update_coding_status(&coding_id, "", "", "", false, &project, true);
+            }
+        }
+        if let Some(prev_id) = previous_active_id.as_ref() {
+            if prev_id != &coding_id {
+                let prev_meta = self.terminal_state.read(cx).meta(prev_id);
+                let (prev_kind, prev_running) = prev_meta.live_activity_agent();
+                match prev_kind {
+                    Some(kind) if prev_running => {
+                        platform_bridge::update_coding_status(
+                            prev_id, kind.native_image_name().unwrap_or(""), kind.display_name(),
+                            kind.native_color().unwrap_or("#FFFFFF"), true, &project, false,
+                        );
+                    }
+                    _ => {
+                        platform_bridge::update_coding_status(prev_id, "", "", "", false, &project, false);
+                    }
+                }
+            }
+        }
     }
 
     fn close_terminal_by_id(&mut self, id: String, cx: &mut Context<Self>) {
@@ -1591,6 +1625,9 @@ impl Workspace {
                 terminal.deactivate(cx);
             });
         }
+
+        let project = self.workspace_state.read(cx).display_name().to_string();
+        platform_bridge::update_coding_status(&id, "", "", "", false, &project, false);
 
         self.terminals.retain(|t| t.read(cx).terminal_id() != id);
         self.session.handle().remove_terminal(&id);
@@ -1641,6 +1678,13 @@ impl Workspace {
 
     fn reconcile_terminals_after_sync(&mut self, cx: &mut Context<Self>) {
         let terminal_ids = self.workspace_state.read(cx).terminal_ids.clone();
+        let project = self.workspace_state.read(cx).display_name().to_string();
+        for terminal in &self.terminals {
+            let tid = terminal.read(cx).terminal_id().to_string();
+            if !should_keep_terminal_entity(&tid, &terminal_ids) {
+                platform_bridge::update_coding_status(&tid, "", "", "", false, &project, false);
+            }
+        }
         self.terminals.retain(|terminal| {
             let id = terminal.read(cx).terminal_id().to_string();
             should_keep_terminal_entity(&id, &terminal_ids)

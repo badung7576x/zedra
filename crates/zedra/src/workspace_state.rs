@@ -204,6 +204,7 @@ impl WorkspaceState {
     pub fn mark_disconnected(&mut self, cx: &mut Context<Self>) {
         self.clear_runtime_state_for_disconnect();
 
+        crate::platform_bridge::end_coding_status();
         cx.emit(WorkspaceStateEvent::StateChanged);
         cx.notify();
     }

@@ -52,6 +52,84 @@ impl Kind {
             Self::Zencoder => Some("icons/zencoder.svg"),
         }
     }
+
+    /// iOS asset catalog image name for Dynamic Island and terminal picker.
+    pub fn native_image_name(self) -> Option<&'static str> {
+        match self {
+            Self::Shell => None,
+            Self::Amp => Some("AgentAmp"),
+            Self::Claude => Some("AgentClaude"),
+            Self::Cline => Some("AgentCline"),
+            Self::Codex => Some("AgentCodex"),
+            Self::Copilot => Some("AgentCopilot"),
+            Self::Cursor => Some("AgentCursor"),
+            Self::Gemini => Some("AgentGemini"),
+            Self::Goose => Some("AgentGoose"),
+            Self::Hermes => Some("AgentHermes"),
+            Self::Junie => Some("AgentJunie"),
+            Self::KiloCode => Some("AgentKiloCode"),
+            Self::OpenClaw => Some("AgentOpenClaw"),
+            Self::OpenCode => Some("AgentOpenCode"),
+            Self::OpenHands => Some("AgentOpenHands"),
+            Self::Pi => Some("AgentPi"),
+            Self::Qoder => Some("AgentQoder"),
+            Self::Qwen => Some("AgentQwen"),
+            Self::Trae => Some("AgentTrae"),
+            Self::Zencoder => Some("AgentZencoder"),
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Shell => "Shell",
+            Self::Amp => "Amp",
+            Self::Claude => "Claude Code",
+            Self::Cline => "Cline",
+            Self::Codex => "Codex",
+            Self::Copilot => "GitHub Copilot",
+            Self::Cursor => "Cursor Agent",
+            Self::Gemini => "Gemini",
+            Self::Goose => "Goose",
+            Self::Hermes => "Hermes Agent",
+            Self::Junie => "Junie",
+            Self::KiloCode => "Kilo Code",
+            Self::OpenClaw => "OpenClaw",
+            Self::OpenCode => "OpenCode",
+            Self::OpenHands => "OpenHands",
+            Self::Pi => "Pi",
+            Self::Qoder => "Qoder",
+            Self::Qwen => "Qwen Code",
+            Self::Trae => "Trae Agent",
+            Self::Zencoder => "Zencoder",
+        }
+    }
+
+    /// Brand color as hex string (e.g. "#D97757" for Claude).
+    /// Used by Dynamic Island to tint agent icons with per-tool color.
+    pub fn native_color(self) -> Option<&'static str> {
+        match self {
+            Self::Shell => None,
+            Self::Amp => Some("#F59E0B"),
+            Self::Claude => Some("#D97757"),
+            Self::Cline => Some("#3B82F6"),
+            Self::Codex => Some("#412991"),
+            Self::Copilot => Some("#6E40C9"),
+            Self::Cursor => Some("#7C3AED"),
+            Self::Gemini => Some("#4285F4"),
+            Self::Goose => Some("#F97316"),
+            Self::Hermes => Some("#10B981"),
+            Self::Junie => Some("#EF4444"),
+            Self::KiloCode => Some("#8B5CF6"),
+            Self::OpenClaw => Some("#14B8A6"),
+            Self::OpenCode => Some("#06B6D4"),
+            Self::OpenHands => Some("#22C55E"),
+            Self::Pi => Some("#A855F7"),
+            Self::Qoder => Some("#EC4899"),
+            Self::Qwen => Some("#F43F5E"),
+            Self::Trae => Some("#0EA5E9"),
+            Self::Zencoder => Some("#64748B"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -252,56 +330,6 @@ impl GenericPromptAgentAdapter {
     fn new(kind: Kind) -> Self {
         Self { kind }
     }
-
-    fn display_name_for(kind: Kind) -> &'static str {
-        match kind {
-            Kind::Shell => "Shell",
-            Kind::Amp => "Amp",
-            Kind::Claude => "Claude Code",
-            Kind::Cline => "Cline",
-            Kind::Codex => "Codex",
-            Kind::Copilot => "GitHub Copilot",
-            Kind::Cursor => "Cursor Agent",
-            Kind::Gemini => "Gemini",
-            Kind::Goose => "Goose",
-            Kind::Hermes => "Hermes Agent",
-            Kind::Junie => "Junie",
-            Kind::KiloCode => "Kilo Code",
-            Kind::OpenClaw => "OpenClaw",
-            Kind::OpenCode => "OpenCode",
-            Kind::OpenHands => "OpenHands",
-            Kind::Pi => "Pi",
-            Kind::Qoder => "Qoder",
-            Kind::Qwen => "Qwen Code",
-            Kind::Trae => "Trae Agent",
-            Kind::Zencoder => "Zencoder",
-        }
-    }
-
-    fn native_image_name(&self) -> Option<&'static str> {
-        match self.kind {
-            Kind::Shell => None,
-            Kind::Amp => Some("AgentAmp"),
-            Kind::Claude => Some("AgentClaude"),
-            Kind::Cline => Some("AgentCline"),
-            Kind::Codex => Some("AgentCodex"),
-            Kind::Copilot => Some("AgentCopilot"),
-            Kind::Cursor => Some("AgentCursor"),
-            Kind::Gemini => Some("AgentGemini"),
-            Kind::Goose => Some("AgentGoose"),
-            Kind::Hermes => Some("AgentHermes"),
-            Kind::Junie => Some("AgentJunie"),
-            Kind::KiloCode => Some("AgentKiloCode"),
-            Kind::OpenClaw => Some("AgentOpenClaw"),
-            Kind::OpenCode => Some("AgentOpenCode"),
-            Kind::OpenHands => Some("AgentOpenHands"),
-            Kind::Pi => Some("AgentPi"),
-            Kind::Qoder => Some("AgentQoder"),
-            Kind::Qwen => Some("AgentQwen"),
-            Kind::Trae => Some("AgentTrae"),
-            Kind::Zencoder => Some("AgentZencoder"),
-        }
-    }
 }
 
 impl AgentAdapter for GenericPromptAgentAdapter {
@@ -310,7 +338,7 @@ impl AgentAdapter for GenericPromptAgentAdapter {
     }
 
     fn display_name(&self) -> &'static str {
-        Self::display_name_for(self.kind)
+        self.kind.display_name()
     }
 
     fn caps(&self) -> AgentCaps {
@@ -318,7 +346,7 @@ impl AgentAdapter for GenericPromptAgentAdapter {
     }
 
     fn target_presentation(&self, title: &str) -> TargetPresentation {
-        if let Some(image_name) = self.native_image_name() {
+        if let Some(image_name) = self.kind.native_image_name() {
             native_target_presentation(title, image_name)
         } else {
             TargetPresentation {

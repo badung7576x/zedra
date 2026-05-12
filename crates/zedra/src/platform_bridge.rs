@@ -669,6 +669,20 @@ pub trait PlatformBridge: Send + Sync + 'static {
     /// or `dispatch_text_input_dismiss(id)` on cancel.
     fn present_text_input(&self, _id: u32, _title: &str, _placeholder: &str, _initial_value: &str) {
     }
+    /// Update Dynamic Island coding status for a terminal.
+    fn update_coding_status(
+        &self,
+        _terminal_id: &str,
+        _image_name: &str,
+        _display_name: &str,
+        _color: &str,
+        _running: bool,
+        _project: &str,
+        _is_active: bool,
+    ) {
+    }
+    /// End the Dynamic Island Live Activity.
+    fn end_coding_status(&self) {}
 }
 
 static BRIDGE: OnceLock<Box<dyn PlatformBridge>> = OnceLock::new();
@@ -724,6 +738,32 @@ pub fn home_indicator_inset() -> f32 {
     } else {
         0.0
     }
+}
+
+/// Update Dynamic Island coding status for a terminal.
+pub fn update_coding_status(
+    terminal_id: &str,
+    image_name: &str,
+    display_name: &str,
+    color: &str,
+    running: bool,
+    project: &str,
+    is_active: bool,
+) {
+    bridge().update_coding_status(
+        terminal_id,
+        image_name,
+        display_name,
+        color,
+        running,
+        project,
+        is_active,
+    );
+}
+
+/// End the Dynamic Island Live Activity.
+pub fn end_coding_status() {
+    bridge().end_coding_status();
 }
 
 /// Fallback bridge for non-Android platforms (and before `set_bridge` is called).

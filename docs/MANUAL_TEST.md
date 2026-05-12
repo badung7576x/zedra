@@ -871,3 +871,38 @@ Expected:
 4. Archive the Release build and inspect the generated `Info.plist`
 5. Expected: the base `UISupportedInterfaceOrientations` key contains `UIInterfaceOrientationPortrait`
 6. Expected: the iPad-specific `UISupportedInterfaceOrientations~ipad` key contains portrait, portrait upside down, landscape left, and landscape right
+
+## 21. Dynamic Island Coding Status
+
+Requires iOS 17.0+ physical device (Live Activity does not appear in simulator).
+
+### Only running agents shown
+
+1. Start Claude Code in a terminal → Dynamic Island shows orange Claude icon + green dot
+2. Claude finishes → Dynamic Island disappears (no idle state shown)
+3. Plain shell → nothing shown on Dynamic Island
+
+### Multi-terminal
+
+1. Claude in terminal 1 + Codex in terminal 2 → compact shows active terminal's colored icon
+2. Switch to terminal 2 → compact shows purple Codex icon
+3. Long-press → expanded shows active highlighted + other running below, each with brand color
+4. Close terminal 1 → only Codex shown
+
+### Minimal view
+
+1. Claude running + open another app → shows orange Claude icon
+
+### Colors
+
+1. Claude = coral/orange icon
+2. Codex = purple icon
+3. Gemini = blue icon
+4. Each agent shows distinct color
+
+### Lifecycle
+
+1. Kill host → Live Activity ends
+2. Disconnect → Live Activity ends
+3. Background while running → persists
+4. All agents idle → Live Activity ends

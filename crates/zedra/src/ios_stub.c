@@ -93,3 +93,11 @@ __attribute__((weak)) void zedra_record_panic(const char *message, const char *l
 __attribute__((weak)) void zedra_set_user_id(const char *user_id) {}
 __attribute__((weak)) void zedra_set_custom_key(const char *key, const char *value) {}
 __attribute__((weak)) void zedra_set_collection_enabled(int enabled) {}
+
+// Dynamic Island Live Activity stubs.
+// Real implementations live in NativeBridge.swift and override at Xcode link time.
+__attribute__((weak)) void ios_update_coding_status(
+    const char *terminal_id, const char *image_name,
+    const char *display_name, const char *color,
+    _Bool running, const char *project, _Bool is_active) {}
+__attribute__((weak)) void ios_end_coding_status(void) {}

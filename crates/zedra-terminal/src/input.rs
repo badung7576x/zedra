@@ -1185,7 +1185,7 @@ mod tests {
 
         let handles_native_selection = window
             .update(&mut cx, |_, window, cx| {
-                handler.handles_native_selection(window, cx)
+                handler.handles_native_selection(cx)
             })
             .unwrap();
 
@@ -1205,7 +1205,7 @@ mod tests {
 
         let handles_native_selection = window
             .update(&mut cx, |_, window, cx| {
-                handler.handles_native_selection(window, cx)
+                handler.handles_native_selection(cx)
             })
             .unwrap();
 
@@ -1221,7 +1221,7 @@ mod tests {
 
         window
             .update(&mut cx, |_, window, cx| {
-                assert!(handler.handles_native_selection(window, cx));
+                assert!(handler.handles_native_selection(cx));
                 assert!(handler.selection_document.is_none());
 
                 let index = handler.character_index_for_point(point(px(2.0), px(10.0)), window, cx);
@@ -1304,7 +1304,7 @@ mod tests {
 
                 assert_eq!(terminal.read(cx).selection_range(), None);
                 assert_eq!(handler.selection_candidate, None);
-                assert!(handler.handles_native_selection(window, cx));
+                assert!(handler.handles_native_selection(cx));
             })
             .unwrap();
     }

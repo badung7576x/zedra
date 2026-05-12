@@ -161,6 +161,18 @@ unsafe extern "C" {
         placeholder: *const std::ffi::c_char,
         initial_value: *const std::ffi::c_char,
     );
+    /// Update Dynamic Island coding status for a terminal.
+    fn ios_update_coding_status(
+        terminal_id: *const std::ffi::c_char,
+        image_name: *const std::ffi::c_char,
+        display_name: *const std::ffi::c_char,
+        color: *const std::ffi::c_char,
+        running: bool,
+        project: *const std::ffi::c_char,
+        is_active: bool,
+    );
+    /// End the Dynamic Island Live Activity.
+    fn ios_end_coding_status();
 }
 
 impl PlatformBridge for IosBridge {
@@ -449,6 +461,42 @@ impl PlatformBridge for IosBridge {
                 initial_value.as_ptr(),
             );
         }
+    }
+
+    fn update_coding_status(
+        &self,
+        terminal_id: &str,
+        image_name: &str,
+        display_name: &str,
+        color: &str,
+        running: bool,
+        project: &str,
+        is_active: bool,
+    ) {
+        use std::ffi::CString;
+
+        let c_terminal_id =
+            CString::new(terminal_id).unwrap_or_else(|_| CString::new("").unwrap());
+        let c_image_name = CString::new(image_name).unwrap_or_else(|_| CString::new("").unwrap());
+        let c_display_name =
+            CString::new(display_name).unwrap_or_else(|_| CString::new("").unwrap());
+        let c_color = CString::new(color).unwrap_or_else(|_| CString::new("#FFFFFF").unwrap());
+        let c_project = CString::new(project).unwrap_or_else(|_| CString::new("").unwrap());
+        unsafe {
+            ios_update_coding_status(
+                c_terminal_id.as_ptr(),
+                c_image_name.as_ptr(),
+                c_display_name.as_ptr(),
+                c_color.as_ptr(),
+                running,
+                c_project.as_ptr(),
+                is_active,
+            );
+        }
+    }
+
+    fn end_coding_status(&self) {
+        unsafe { ios_end_coding_status() };
     }
 }
 
