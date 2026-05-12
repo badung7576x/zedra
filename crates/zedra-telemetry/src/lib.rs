@@ -15,7 +15,7 @@ use std::sync::{
 };
 
 static BACKEND: OnceLock<Box<dyn TelemetryBackend>> = OnceLock::new();
-static ENABLED: AtomicBool = AtomicBool::new(true);
+static ENABLED: AtomicBool = AtomicBool::new(false);
 
 // ---------------------------------------------------------------------------
 // Event enum — every telemetry event is a typed variant
@@ -197,6 +197,20 @@ pub enum Event {
         remaining: usize,
     },
 
+    // ── Live Activity (Dynamic Island) ────────────────────────────────────
+    /// Dynamic Island Live Activity started for a running coding agent.
+    LiveActivityStarted {
+        tool: String,
+        project: String,
+    },
+    /// Dynamic Island coding status updated (agent kind or running state changed).
+    LiveActivityUpdated {
+        tool: String,
+        running: bool,
+    },
+    /// Dynamic Island Live Activity ended (all agents idle or disconnect).
+    LiveActivityEnded,
+
     // ═══════════════════════════════════════════════════════════════════════
     // HOST EVENTS — desktop daemon (zedra-host)
     // ═══════════════════════════════════════════════════════════════════════
@@ -364,6 +378,9 @@ impl Event {
             Self::ConnectionLatencySample { .. } => "connection_latency_sample",
             Self::TerminalOpened { .. } => "terminal_opened",
             Self::TerminalClosed { .. } => "terminal_closed",
+            Self::LiveActivityStarted { .. } => "live_activity_started",
+            Self::LiveActivityUpdated { .. } => "live_activity_updated",
+            Self::LiveActivityEnded => "live_activity_ended",
             Self::DaemonStart { .. } => "daemon_start",
             Self::StartupComplete { .. } => "startup_complete",
             Self::NetReport { .. } => "net_report",
@@ -553,6 +570,15 @@ impl Event {
                 ("terminal_count", terminal_count.to_string()),
             ],
             Self::TerminalClosed { remaining } => vec![("remaining", remaining.to_string())],
+            Self::LiveActivityStarted { tool, project } => vec![
+                ("tool", tool.clone()),
+                ("project", project.clone()),
+            ],
+            Self::LiveActivityUpdated { tool, running } => vec![
+                ("tool", tool.clone()),
+                ("running", bool_str(*running)),
+            ],
+            Self::LiveActivityEnded => vec![],
             Self::DaemonStart {
                 relay_type,
                 is_first_run,

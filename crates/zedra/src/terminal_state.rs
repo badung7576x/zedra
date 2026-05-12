@@ -27,6 +27,24 @@ pub struct TerminalMeta {
     pub agent_source: AgentIdentitySource,
 }
 
+impl TerminalMeta {
+    /// Returns (detected agent kind, is_running) for Live Activity.
+    /// Primary: OSC 633/133/1 detection via `agent_kind`.
+    /// Fallback: title-based detection when shell integration is unavailable.
+    pub fn live_activity_agent(&self) -> (Option<agent::Kind>, bool) {
+        if let Some(kind) = self.agent_kind {
+            return (Some(kind), matches!(self.shell_state, ShellState::Running));
+        }
+        if let Some(title) = &self.plain_title {
+            let kind = agent::detect(title);
+            if kind != agent::Kind::Shell {
+                return (Some(kind), true);
+            }
+        }
+        (None, false)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum AgentIdentitySource {
     #[default]

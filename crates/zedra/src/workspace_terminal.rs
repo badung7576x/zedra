@@ -19,7 +19,7 @@ use crate::platform_bridge::{
 use crate::settings::{ThemeStateEvent, theme_state as theme_entity};
 use crate::telemetry::view_telemetry;
 use crate::terminal_preview_view::TerminalPreviewView;
-use crate::terminal_state::TerminalState;
+use crate::terminal_state::{ShellState, TerminalState};
 use crate::workspace_state::{WorkspaceState, WorkspaceStateEvent};
 
 pub const TERMINAL_PENDING_ID: &str = "___PENDING___";
@@ -52,6 +52,8 @@ pub struct WorkspaceTerminal {
     scroll_to_bottom_button_visible: bool,
     scroll_to_bottom_button_hide_pending: bool,
     scroll_to_bottom_button_hide_generation: u64,
+    /// Deduplication state for Dynamic Island FFI calls: (image_name, is_running).
+    last_live_activity_state: (Option<String>, bool),
     _subscriptions: Vec<Subscription>,
 }
 
@@ -252,6 +254,39 @@ impl WorkspaceTerminal {
                         }
                         cx.notify();
                     });
+
+                    // Update Dynamic Island for running agents only.
+                    let active_tid = this.workspace_state.read(cx).active_terminal_id.clone();
+                    let project = this.workspace_state.read(cx).display_name().to_string();
+                    let is_active = active_tid.as_deref() == Some(this.terminal_id.as_str());
+                    let meta = this.terminal_state.read(cx).meta(&this.terminal_id);
+                    let (detected_kind, is_running) = meta.live_activity_agent();
+                    let current_state = (
+                        detected_kind.and_then(|k| k.native_image_name().map(|s| s.to_string())),
+                        is_running,
+                    );
+                    if current_state != this.last_live_activity_state {
+                        let prev_running = this.last_live_activity_state.1;
+                        this.last_live_activity_state = current_state.clone();
+                        match detected_kind {
+                            Some(kind) => {
+                                platform_bridge::update_coding_status(
+                                    &this.terminal_id,
+                                    kind.native_image_name().unwrap_or(""),
+                                    kind.display_name(),
+                                    kind.native_color().unwrap_or("#FFFFFF"),
+                                    true,
+                                    &project,
+                                    is_active,
+                                );
+                            }
+                            _ => {
+                                platform_bridge::update_coding_status(
+                                    &this.terminal_id, "", "", "", false, &project, is_active,
+                                );
+                            }
+                        }
+                    }
                 }
                 TerminalEvent::OpenHyperlink(hyperlink) => match &hyperlink.target {
                     TerminalHyperlinkTarget::Url { url } => {
@@ -409,6 +444,7 @@ impl WorkspaceTerminal {
             scroll_to_bottom_button_visible: false,
             scroll_to_bottom_button_hide_pending: false,
             scroll_to_bottom_button_hide_generation: 0,
+            last_live_activity_state: (None, false),
             _subscriptions: subscriptions,
         };
         this.sync_terminal_theme(cx);

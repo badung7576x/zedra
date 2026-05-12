@@ -213,3 +213,94 @@ Automatic in `ios/project.yml`. Pass `-allowProvisioningUpdates` to xcodebuild.
 - **Firebase config**: Debug builds work without `ios/Zedra/GoogleService-Info.plist`; Release builds require it.
 - **Metal device**: iOS uses `system_default()` directly. macOS `isRemovable()`/`isLowPower()` selectors crash on iOS.
 - **`with_input_handler` log spam**: harmless — UIKit queries text input before IosWindow is registered.
+
+## Live Activity Setup (Dynamic Island)
+
+The Live Activity widget extension shows running coding agent status in the Dynamic Island. Requires iOS 17.0+ physical device (not visible in simulator).
+
+### Step 1: Bump Deployment Target
+
+In Xcode, select the **Zedra** project → select **Zedra** target → Build Settings:
+
+| Setting | Value |
+|---------|-------|
+| iOS Deployment Target | 17.0 |
+
+Repeat for the **project** level (Project → Info → iOS Deployment Target → 17.0).
+
+Also update `ios/project.yml`:
+
+```yaml
+deploymentTarget:
+  iOS: "17.0"
+```
+
+Then regenerate: `cd ios && xcodegen generate`.
+
+### Step 2: Add NSSupportsLiveActivities
+
+Edit `ios/Zedra/Info.plist` — add:
+
+```xml
+<key>NSSupportsLiveActivities</key>
+<true/>
+```
+
+### Step 3: Add Widget Extension Target
+
+1. Open `ios/Zedra.xcodeproj` in Xcode
+2. Select the Zedra project → File → New → Target
+3. Choose **Widget Extension** → Next
+4. Product Name: `ZedraLiveActivity`
+5. **Uncheck** "Include Live Activity" and "Include Configuration App Intent"
+6. Click Finish, accept scheme activation prompt
+
+### Step 4: Configure Widget Extension Target
+
+In Xcode, select `ZedraLiveActivity` target → Build Settings:
+
+| Setting | Value |
+|---------|-------|
+| Product Bundle Identifier | `dev.zedra.app.live-activity` |
+| iOS Deployment Target | 17.0 |
+| Signing Team | GHV27CNR5U |
+| Signing Style | Automatic |
+
+### Step 5: Replace Generated Files
+
+Delete the auto-generated widget Swift files from Xcode and replace with:
+
+- `ios/ZedraLiveActivity/CodingStatusLiveActivity.swift` — Dynamic Island views
+- `ios/ZedraLiveActivity/CodingStatusLiveActivityBundle.swift` — Widget entry point
+
+### Step 6: Copy Agent Image Assets
+
+Agent imagesets must be in the widget extension's asset catalog:
+
+```sh
+mkdir -p ios/ZedraLiveActivity/Assets.xcassets
+cp -r ios/Zedra/Assets.xcassets/Agent*.imageset ios/ZedraLiveActivity/Assets.xcassets/
+```
+
+Add the `Assets.xcassets` to the `ZedraLiveActivity` target's "Copy Bundle Resources" build phase in Xcode.
+
+### Step 7: Set Target Membership for Shared Files
+
+Select `ios/Zedra/CodingStatusAttributes.swift` in Xcode navigator → File Inspector → Target Membership → check both `Zedra` and `ZedraLiveActivity`.
+
+### Step 8: Build and Verify
+
+1. Select **Zedra** scheme → physical device
+2. Build (⌘B)
+3. Run (⌘R) on device to test Live Activity
+
+### Troubleshooting
+
+| Issue | Fix |
+|-------|-----|
+| "ActivityKit is not available" | Verify deployment target is 17.0+ for both targets |
+| Agent images not showing | Verify imagesets are in widget's Assets.xcassets and "Copy Bundle Resources" |
+| "No such module 'WidgetKit'" | Add WidgetKit framework to widget target's "Link Binary with Libraries" |
+| Build error: duplicate symbols | Widget extension should NOT link `ZedraFFI.xcframework` (app-only) |
+| `CodingStatusAttributes` not found | Verify target membership includes both Zedra and ZedraLiveActivity |
+| Rust changes not reflected | Clean build (⌘⇧K) then rebuild |
