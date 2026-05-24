@@ -1,13 +1,17 @@
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tracing::*;
 
-use zedra_rpc::proto::HostEvent;
+use zedra_rpc::proto::{FsEntry, HostEvent};
 use zedra_session::{Session, SessionHandle, SessionState};
+use zedra_rpc::proto::FS_SEARCH_DEFAULT_LIMIT;
 
 use crate::theme;
+use crate::ui::input::Input;
+use crate::ui::InputChanged;
 use crate::workspace_action;
 use crate::workspace_state::WorkspaceState;
 
@@ -89,6 +93,14 @@ pub struct FileExplorer {
     session_state: Entity<SessionState>,
     session_handle: SessionHandle,
     _subscriptions: Vec<Subscription>,
+
+    // Search state
+    search_input: Entity<Input>,
+    search_results: Vec<FsEntry>,
+    search_truncated: bool,
+    search_loading: bool,
+    search_epoch: u64,
+    search_debounce_task: Option<Task<()>>,
 }
 
 const OBSERVER_REFRESH_THROTTLE: Duration = Duration::from_millis(1200);
@@ -126,6 +138,26 @@ impl FileExplorer {
             }
         });
 
+        let search_input = cx.new(|cx| {
+            Input::new(cx)
+                .placeholder("Search files...")
+                .compact(true)
+                .native_suggestions(false)
+                .leading_gutter(20.0)
+                .trailing_gutter(20.0)
+        });
+        let search_sub = cx.subscribe(
+            &search_input,
+            |this: &mut Self, _input, event: &InputChanged, cx| {
+                let query = event.value.trim().to_string();
+                if query.is_empty() {
+                    this.clear_search(cx);
+                } else {
+                    this.schedule_search(cx);
+                }
+            },
+        );
+
         Self {
             entries: Vec::new(),
             focus_handle: cx.focus_handle(),
@@ -142,7 +174,13 @@ impl FileExplorer {
             workspace_state,
             session_state,
             session_handle,
-            _subscriptions: vec![workspace_state_subscription],
+            _subscriptions: vec![workspace_state_subscription, search_sub],
+            search_input,
+            search_results: Vec::new(),
+            search_truncated: false,
+            search_loading: false,
+            search_epoch: 0,
+            search_debounce_task: None,
         }
     }
 
@@ -570,6 +608,63 @@ impl FileExplorer {
             }
         }
     }
+
+    fn is_searching(&self, cx: &App) -> bool {
+        self.search_input.read_with(cx, |input: &Input, _| !input.get_value().trim().is_empty())
+    }
+
+    fn schedule_search(&mut self, cx: &mut Context<Self>) {
+        self.search_debounce_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(300)).await;
+            let _ = this.update(cx, |this, cx| this.execute_search(cx));
+        }));
+    }
+
+    fn execute_search(&mut self, cx: &mut Context<Self>) {
+        let query = self.search_input.read_with(cx, |input: &Input, _| input.get_value().trim().to_string());
+        if query.is_empty() {
+            self.clear_search(cx);
+            return;
+        }
+
+        self.search_epoch = self.search_epoch.wrapping_add(1);
+        self.search_loading = true;
+        self.search_results.clear();
+        self.search_truncated = false;
+        cx.notify();
+
+        let epoch = self.search_epoch;
+        let handle = self.session_handle.clone();
+        cx.spawn(async move |this, cx| {
+            let result = handle.fs_search(&query, FS_SEARCH_DEFAULT_LIMIT).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.search_epoch != epoch {
+                    return;
+                }
+                this.search_loading = false;
+                match result {
+                    Ok((entries, truncated)) => {
+                        this.search_results = entries;
+                        this.search_truncated = truncated;
+                    }
+                    Err(e) => {
+                        error!("fs_search failed: {}", e);
+                        this.search_results.clear();
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn clear_search(&mut self, cx: &mut Context<Self>) {
+        self.search_results.clear();
+        self.search_truncated = false;
+        self.search_loading = false;
+        self.search_debounce_task = None;
+        cx.notify();
+    }
 }
 
 fn flatten_entries(entries: &[FileEntry], root_total: u32) -> Vec<FlatEntry> {
@@ -688,6 +783,15 @@ impl Render for FileExplorer {
         }
 
         let flat_len = self.flat_entries.len();
+        let searching = self.is_searching(cx);
+        let search_result_count = if searching {
+            let n = self.search_results.len();
+            if self.search_loading { 1 } else { n + if self.search_truncated { 1 } else { 0 } + if n == 0 && !self.search_loading { 1 } else { 0 } }
+        } else {
+            0
+        };
+        let list_count = if searching { search_result_count } else { flat_len };
+
         div()
             .track_focus(&self.focus_handle)
             .id("file-list-container")
@@ -697,20 +801,84 @@ impl Render for FileExplorer {
             .min_h_0()
             .overflow_hidden()
             .relative()
+            .child(self.render_search_bar(cx))
             .child(
-                uniform_list(
-                    "file-list",
-                    flat_len,
-                    cx.processor(|this, range: std::ops::Range<usize>, window, cx| {
-                        range
-                            .filter_map(|flat_idx| {
-                                this.flat_entries.get(flat_idx).cloned().map(|entry| {
-                                    this.render_flat_entry(flat_idx, entry, window, cx)
+                if searching {
+                    uniform_list(
+                        "search-results",
+                        list_count,
+                        cx.processor(|this, range: std::ops::Range<usize>, window, cx| {
+                            let mut items = Vec::new();
+                            if this.search_loading {
+                                if range.contains(&0) {
+                                    items.push(div()
+                                        .id(0)
+                                        .w_full()
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .h(px(theme::PANEL_ITEM_HEIGHT))
+                                        .px(px(12.0))
+                                        .text_color(rgb(theme::TEXT_MUTED))
+                                        .text_size(px(theme::FONT_BODY))
+                                        .child("Searching...")
+                                        .into_any_element());
+                                }
+                                return items;
+                            }
+                            if this.search_results.is_empty() {
+                                if range.contains(&0) {
+                                    items.push(div()
+                                        .id(0)
+                                        .w_full()
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .h(px(theme::PANEL_ITEM_HEIGHT))
+                                        .px(px(12.0))
+                                        .text_color(rgb(theme::TEXT_MUTED))
+                                        .text_size(px(theme::FONT_BODY))
+                                        .child("No files found")
+                                        .into_any_element());
+                                }
+                                return items;
+                            }
+                            for i in range {
+                                if i < this.search_results.len() {
+                                    items.push(this.render_search_entry(i, window, cx));
+                                } else if this.search_truncated {
+                                    items.push(div()
+                                        .id(i)
+                                        .w_full()
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .h(px(theme::PANEL_ITEM_HEIGHT))
+                                        .px(px(12.0))
+                                        .text_color(rgb(theme::TEXT_MUTED))
+                                        .text_size(px(theme::FONT_BODY))
+                                        .child("More results available...")
+                                        .into_any_element());
+                                }
+                            }
+                            items
+                        }),
+                    )
+                } else {
+                    uniform_list(
+                        "file-list",
+                        flat_len,
+                        cx.processor(|this, range: std::ops::Range<usize>, window, cx| {
+                            range
+                                .filter_map(|flat_idx| {
+                                    this.flat_entries.get(flat_idx).cloned().map(|entry| {
+                                        this.render_flat_entry(flat_idx, entry, window, cx)
+                                    })
                                 })
-                            })
-                            .collect::<Vec<_>>()
-                    }),
-                )
+                                .collect::<Vec<_>>()
+                        }),
+                    )
+                }
                 .track_scroll(&self.scroll_handle)
                 .size_full()
                 .flex_grow(),
@@ -719,6 +887,156 @@ impl Render for FileExplorer {
 }
 
 impl FileExplorer {
+    fn render_search_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let has_query = self.is_searching(cx);
+        div()
+            .id("search-bar-wrapper")
+            .w_full()
+            .px(px(theme::DRAWER_PADDING))
+            .pt(px(theme::SPACING_SM))
+            .pb(px(theme::SPACING_SM))
+            .child(
+                div()
+                    .relative()
+                    .w_full()
+                    .child(self.search_input.clone())
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(6.0))
+                            .top_0()
+                            .bottom_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                svg()
+                                    .path("icons/search.svg")
+                                    .size(px(theme::ICON_XS))
+                                    .text_color(rgb(theme::TEXT_MUTED)),
+                            ),
+                    )
+                    .when(has_query, |el| {
+                        let input = self.search_input.clone();
+                        el.child(
+                            div()
+                                .id("search-clear-btn")
+                                .absolute()
+                                .right(px(6.0))
+                                .top_0()
+                                .bottom_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .on_press(cx.listener(move |this, _ev, _window, cx| {
+                                    input.update(cx, |input, _cx| {
+                                        input.set_value("");
+                                    });
+                                    this.clear_search(cx);
+                                }))
+                                .child(
+                                    svg()
+                                        .path("icons/x.svg")
+                                        .size(px(theme::ICON_XS))
+                                        .text_color(rgb(theme::TEXT_MUTED)),
+                                ),
+                        )
+                    }),
+            )
+    }
+
+    fn render_search_entry(
+        &mut self,
+        idx: usize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let entry = match self.search_results.get(idx) {
+            Some(e) => e.clone(),
+            None => return div().into_any_element(),
+        };
+        let is_dir = entry.is_dir;
+        let name = entry.name.clone();
+        let path = entry.path.clone();
+        let parent = Path::new(&path)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        let icon: AnyElement = if is_dir {
+            svg()
+                .path("icons/folder.svg")
+                .size(px(theme::ICON_FILE))
+                .text_color(rgb(theme::TEXT_MUTED))
+                .into_any_element()
+        } else {
+            svg()
+                .path("icons/file.svg")
+                .size(px(theme::ICON_FILE))
+                .text_color(rgb(theme::TEXT_MUTED))
+                .into_any_element()
+        };
+
+        let is_selected = !is_dir
+            && !path.is_empty()
+            && self
+                .workspace_state
+                .read(cx)
+                .active_main_view
+                .is_file_path(&path);
+
+        let mut row = div()
+            .id(idx)
+            .w_full()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(6.0))
+            .h(px(theme::PANEL_ITEM_HEIGHT + 6.0))
+            .px(px(theme::DRAWER_PADDING))
+            .cursor_pointer()
+            .on_press(cx.listener(move |_this, _event, window, cx| {
+                if !is_dir && !path.is_empty() {
+                    window.dispatch_action(
+                        workspace_action::OpenFile {
+                            path: path.clone(),
+                        }
+                        .boxed_clone(),
+                        cx,
+                    );
+                }
+            }))
+            .child(div().flex_shrink_0().child(icon))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .truncate()
+                            .text_color(if is_dir { rgb(0xffffff) } else { rgb(0xcacaca) })
+                            .text_size(px(theme::FONT_BODY))
+                            .child(name),
+                    )
+                    .when(!parent.is_empty(), |el| {
+                        el.child(
+                            div()
+                                .truncate()
+                                .text_color(rgb(theme::TEXT_MUTED))
+                                .text_size(px(theme::FONT_BODY - 2.0))
+                                .child(parent),
+                        )
+                    }),
+            );
+        if is_selected {
+            row = row.bg(hsla(0.0, 0.0, 1.0, 0.10));
+        }
+        row.into_any_element()
+    }
+
     fn render_flat_entry(
         &mut self,
         flat_idx: usize,

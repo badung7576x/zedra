@@ -368,6 +368,7 @@ impl SessionHandle {
     }
 
     pub async fn fs_read(&self, path: &str) -> Result<FsReadResult> {
+
         Ok(self
             .client()?
             .rpc(FsReadReq {
@@ -398,6 +399,20 @@ impl SessionHandle {
             return Err(anyhow::anyhow!(e));
         }
         Ok(result)
+    }
+
+    pub async fn fs_search(&self, query: &str, limit: u32) -> Result<(Vec<FsEntry>, bool)> {
+        let result: FsSearchResult = self
+            .client()?
+            .rpc(FsSearchReq {
+                query: query.to_string(),
+                limit,
+            })
+            .await?;
+        if let Some(e) = result.error {
+            return Err(anyhow::anyhow!(e));
+        }
+        Ok((result.entries, result.truncated))
     }
 
     pub async fn fs_docs_tree(

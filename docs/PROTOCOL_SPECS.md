@@ -159,6 +159,7 @@ challenge is carried by `ConnectResult::Challenge`.
 - `FsRead(FsReadReq) -> FsReadResult`
 - `FsWrite(FsWriteReq) -> FsWriteResult`
 - `FsStat(FsStatReq) -> FsStatResult`
+- `FsSearch(FsSearchReq) -> FsSearchResult`
 - `FsDocsTree(FsDocsTreeReq) -> FsDocsTreeResult`
 - `FsWatch(FsWatchReq) -> FsWatchResult`
 - `FsUnwatch(FsUnwatchReq) -> FsUnwatchResult`
@@ -172,7 +173,7 @@ Most result structs carry `error: Option<String>`. When set, the operation faile
 - Never silently ignore a set `error` — propagate as `Err` or show in UI.
 
 Result types that carry `error: Option<String>`:
-`FsListResult`, `FsReadResult`, `FsStatResult`, `SessionSwitchResult`, `TermCreateResult`,
+`FsListResult`, `FsReadResult`, `FsStatResult`, `FsSearchResult`, `SessionSwitchResult`, `TermCreateResult`,
 `GitStatusResult`, `GitDiffResult`, `GitLogResult`, `GitCommitResult`, `GitStageResult`,
 `GitUnstageResult`, `GitBranchesResult`, `AgentListResult`, `AgentSessionsResult`,
 `AgentResumeResult`, `LspDiagnosticsResult`.
@@ -191,6 +192,16 @@ Types that use non-string status fields or enum variants instead:
 - `offset` is zero-based index into stable listing order returned by host.
 - `limit` is clamped by host to `FS_LIST_DEFAULT_LIMIT` when necessary.
 - `has_more` indicates additional entries exist after this page.
+
+### FsSearch conventions
+
+- `query` is a case-insensitive substring matched against filenames only (not full paths).
+- `limit` is clamped by host to `FS_SEARCH_DEFAULT_LIMIT` (100) when zero or unset.
+- `truncated = true` means more matching files exist beyond the returned page.
+- Empty or whitespace-only queries return empty results immediately without walking the filesystem.
+- Results are sorted: directories first, then files, alphabetical within each group.
+- Host walks the workspace root using `ignore::WalkBuilder`, respecting `.gitignore` and built-in ignores.
+- Search is workspace-wide regardless of client directory expansion state.
 
 ### FsDocsTree conventions
 

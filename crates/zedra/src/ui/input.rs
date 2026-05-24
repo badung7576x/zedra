@@ -207,6 +207,8 @@ pub struct Input {
     compact: bool,
     /// Extra space reserved on the right inside the field (e.g. trailing icon button).
     trailing_gutter: f32,
+    /// Extra space reserved on the left inside the field (e.g. leading search icon).
+    leading_gutter: f32,
     /// When true, text wraps and Enter inserts a newline instead of submitting.
     multiline: bool,
     /// When set (multiline only), inner text area scrolls after this many lines of height.
@@ -235,6 +237,7 @@ impl Input {
             last_keystroke: None,
             compact: false,
             trailing_gutter: 0.0,
+            leading_gutter: 0.0,
             multiline: false,
             max_lines: None,
             cursor_byte: 0,
@@ -289,6 +292,12 @@ impl Input {
     /// Reserve horizontal space on the right for a control overlaid inside the field.
     pub fn trailing_gutter(mut self, px: f32) -> Self {
         self.trailing_gutter = px;
+        self
+    }
+
+    /// Reserve horizontal space on the left for a control overlaid inside the field.
+    pub fn leading_gutter(mut self, px: f32) -> Self {
+        self.leading_gutter = px;
         self
     }
 
@@ -1184,7 +1193,7 @@ impl Render for Input {
             })
             .on_press(cx.listener(Self::handle_press))
             .on_key_down(cx.listener(Self::handle_key_down))
-            .pl(px(horizontal_padding))
+            .pl(px(horizontal_padding + self.leading_gutter))
             .pr(px(horizontal_padding + self.trailing_gutter))
             .py(px(vertical_padding))
             .w_full()

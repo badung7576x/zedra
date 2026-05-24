@@ -554,6 +554,46 @@ fn normalize_observer_path(path: &str) -> Option<String> {
     }
 }
 
+fn fs_search_walk(root: &Path, query: &str, limit: usize) -> FsSearchResult {
+    let mut entries: Vec<FsEntry> = Vec::new();
+    let mut builder = ignore::WalkBuilder::new(root);
+    builder.hidden(false).git_ignore(true).git_global(true).git_exclude(true);
+    let mut visited: u32 = 0;
+    const MAX_VISITED: u32 = 50_000;
+
+    for entry in builder.build().filter_map(|e| e.ok()) {
+        visited += 1;
+        if visited > MAX_VISITED {
+            break;
+        }
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        if !file_name.to_lowercase().contains(query) {
+            continue;
+        }
+        let raw_path = entry.path();
+        let path = match raw_path.strip_prefix(root) {
+            Ok(rel) => rel.to_string_lossy().into_owned(),
+            Err(_) => raw_path.to_string_lossy().into_owned(),
+        };
+        let metadata = entry.metadata().ok();
+        let is_dir = metadata.as_ref().is_some_and(|m| m.is_dir());
+        let size = metadata.and_then(|m| m.len().try_into().ok()).unwrap_or(0);
+        entries.push(FsEntry { name: file_name, path, is_dir, size });
+        if entries.len() >= limit + 100 {
+            break;
+        }
+    }
+
+    entries.sort_by(|a, b| {
+        b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    let truncated = entries.len() > limit;
+    entries.truncate(limit);
+
+    FsSearchResult { entries, truncated, error: None }
+}
+
 fn git_status_fingerprint(workdir: &Path) -> Option<u64> {
     let output = std::process::Command::new("git")
         .arg("-C")
@@ -2199,6 +2239,38 @@ async fn dispatch(
                 }
                 None => FsUnwatchResult::InvalidPath,
             };
+            let _ = msg.tx.send(result).await;
+        }
+
+        ZedraMessage::FsSearch(msg) => {
+            let query = msg.query.trim().to_lowercase();
+            let query: String = query.chars().take(256).collect();
+            if query.is_empty() {
+                let _ = msg
+                    .tx
+                    .send(FsSearchResult {
+                        entries: vec![],
+                        truncated: false,
+                        error: None,
+                    })
+                    .await;
+                return Ok(());
+            }
+            let limit = if msg.limit > 0 {
+                msg.limit.min(FS_SEARCH_DEFAULT_LIMIT)
+            } else {
+                FS_SEARCH_DEFAULT_LIMIT
+            } as usize;
+            let root = state.workdir.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                fs_search_walk(&root, &query, limit)
+            })
+            .await
+            .unwrap_or_else(|e| FsSearchResult {
+                entries: vec![],
+                truncated: false,
+                error: Some(format!("search worker failed: {e}")),
+            });
             let _ = msg.tx.send(result).await;
         }
 

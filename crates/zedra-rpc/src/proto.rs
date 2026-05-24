@@ -190,6 +190,11 @@ pub enum ZedraProto {
     /// gated on the client by `host_version`.
     #[rpc(tx = oneshot::Sender<TermCreateResult>)]
     TermCreateV2(TermCreateReqV2),
+
+    /// Search workspace filenames by substring (case-insensitive).
+    /// Kept at enum tail because protocol variants are append-only.
+    #[rpc(tx = oneshot::Sender<FsSearchResult>)]
+    FsSearch(FsSearchReq),
 }
 
 // ---------------------------------------------------------------------------
@@ -208,6 +213,8 @@ pub const FS_DOCS_TREE_MAX_LIMIT: u32 = 1000;
 pub const FS_DOCS_TREE_MAX_OFFSET: u32 = 5_000;
 /// Maximum filesystem entries visited while rebuilding one docs tree snapshot.
 pub const FS_DOCS_TREE_MAX_VISITED_ENTRIES: u32 = 10_000;
+/// Default max results for FsSearch requests.
+pub const FS_SEARCH_DEFAULT_LIMIT: u32 = 100;
 
 // ---------------------------------------------------------------------------
 // Serde helper for [u8; 64] (serde supports arrays only up to size 32 by default)
@@ -650,6 +657,26 @@ pub enum FsDocsTreeError {
     ScanFailed(String),
     /// Client-local fallback when connected host does not support this RPC yet.
     Unsupported,
+}
+
+// ---------------------------------------------------------------------------
+// File search types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FsSearchReq {
+    /// Substring to match against filenames (case-insensitive).
+    pub query: String,
+    /// Max results to return (0 = use FS_SEARCH_DEFAULT_LIMIT).
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FsSearchResult {
+    pub entries: Vec<FsEntry>,
+    /// True if more results exist beyond the returned entries.
+    pub truncated: bool,
+    pub error: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1462,6 +1489,24 @@ mod tests {
         assert_eq!(decoded.terminals[0].position, 0);
         assert_eq!(decoded.terminals[0].last_seq, 42);
         assert_eq!(decoded.terminals[0].icon_name.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn fs_search_roundtrip() {
+        let result = FsSearchResult {
+            entries: vec![FsEntry {
+                name: "lib.rs".to_string(),
+                path: "src/lib.rs".to_string(),
+                is_dir: false,
+                size: 1024,
+            }],
+            truncated: true,
+            error: None,
+        };
+        let encoded = postcard::to_allocvec(&result).unwrap();
+        let decoded: FsSearchResult = postcard::from_bytes(&encoded).unwrap();
+        assert_eq!(decoded.entries[0].name, "lib.rs");
+        assert!(decoded.truncated);
     }
 
     #[test]
