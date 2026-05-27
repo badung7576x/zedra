@@ -104,6 +104,66 @@ Runtime files are stored under `%APPDATA%\zedra\workspaces\`. `daemon.lock` uses
 
 To build from source instead, install the MSVC Rust toolchain and Git for Windows, then run `cargo build -p zedra-host`.
 
+## Local Development Without Telemetry
+
+Telemetry is disabled by default in local source builds. GA4 credentials (`ZEDRA_GA_MEASUREMENT_ID`, `ZEDRA_GA_API_SECRET`) are required only for release/distribution builds — if either is unset at compile time, the host produces a binary with telemetry silently disabled.
+
+### Host (macOS / Linux)
+
+Build and install a release binary without telemetry:
+
+```sh
+rm ~/.local/bin/zedra
+cargo build --release -p zedra-host
+cp target/release/zedra ~/.local/bin/zedra
+codesign --force --sign - ~/.local/bin/zedra   # macOS only
+```
+
+The `rm` ensures a stale binary isn't left in `$PATH`. `codesign` is required on macOS to avoid Gatekeeper quarantine prompts.
+
+Additional runtime opt-out if building with credentials present:
+
+```sh
+zedra start --no-telemetry              # CLI flag
+ZEDRA_TELEMETRY=0 zedra start           # env var
+zedra start --debug-telemetry           # log events to stderr instead of sending
+```
+
+### iOS App
+
+Debug builds are telemetry-free by default:
+
+- `GoogleService-Info.plist` is **optional** for debug — Firebase init becomes a no-op when absent.
+- Release builds **require** the plist and will fail during Xcode build when it is missing.
+- `debug-telemetry` Cargo feature logs event payloads to the Xcode console without sending to Firebase.
+
+```sh
+./scripts/run-ios.sh device                                # debug build (no telemetry)
+./scripts/run-ios.sh device --debug-telemetry              # debug build, log events to console
+```
+
+### Android App
+
+Debug builds disable Firebase collection at three layers — manifest placeholders, `BuildConfig.DEBUG` guard, and `ZedraFirebase.setCollectionEnabled()`:
+
+```sh
+./scripts/build-android.sh                                 # debug build (no telemetry)
+./scripts/build-android.sh --debug-telemetry               # debug build, log events to logcat
+```
+
+Release builds require `android/google-services.json` and apply Firebase Gradle plugins automatically.
+
+### Verifying Telemetry Is Off
+
+| Check | Expected |
+|-------|----------|
+| Host: `zedra start` without GA4 env vars | No outbound HTTPS to GA4 |
+| Host: `--debug-telemetry` flag | Events printed to stderr with `[telemetry]` prefix |
+| iOS debug without `GoogleService-Info.plist` | Console: `Firebase disabled: GoogleService-Info.plist is not bundled` |
+| Android debug build | `BuildConfig.DEBUG == true`, Firebase SDK collection disabled |
+
+See `docs/TELEMETRY.md` for the full telemetry architecture.
+
 ## Pre-Commit Checks
 
 ```bash
