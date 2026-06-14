@@ -2038,9 +2038,28 @@ impl Workspace {
             cx,
         );
 
+        // Claude only: append `--resume {session_id}` to the user's profile.
+        // The token is an internal client/host contract (never user-facing);
+        // the host substitutes the shell-quoted session id.
+        let launch_cmd_override = if kind == ManagedAgentKind::Claude {
+            Some(format!(
+                "{} --resume {}",
+                crate::settings::claude_command(),
+                crate::settings::RESUME_SESSION_ID_TOKEN,
+            ))
+        } else {
+            None
+        };
+
         cx.spawn(async move |workspace, cx| {
             let terminal_id = match session_handle
-                .agent_resume_session(kind, session_id, cols as u16, rows as u16)
+                .agent_resume_session(
+                    kind,
+                    session_id,
+                    cols as u16,
+                    rows as u16,
+                    launch_cmd_override,
+                )
                 .await
             {
                 Ok(id) => id,

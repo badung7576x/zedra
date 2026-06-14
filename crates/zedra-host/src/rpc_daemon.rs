@@ -3051,7 +3051,11 @@ async fn dispatch(
                 .workdir
                 .clone()
                 .or_else(|| Some(state.workdir.clone()));
-            let launch_cmd = agent::resume_launch_command(msg.kind, &msg.session_id);
+            let launch_cmd = agent::resume_launch_command_with_override(
+                msg.kind,
+                &msg.session_id,
+                msg.launch_cmd_override.as_deref(),
+            );
             let Some(launch_cmd) = launch_cmd else {
                 let _ = msg
                     .tx

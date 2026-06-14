@@ -649,6 +649,7 @@ impl SessionHandle {
         session_id: String,
         cols: u16,
         rows: u16,
+        launch_cmd_override: Option<String>,
     ) -> Result<String> {
         // Reuse one client for the resume RPC and the attach (see
         // terminal_create_with_cmd for the race this avoids).
@@ -659,6 +660,7 @@ impl SessionHandle {
                 session_id,
                 cols,
                 rows,
+                launch_cmd_override,
             })
             .await
             .map_err(map_rpc_error)?;

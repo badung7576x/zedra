@@ -1062,6 +1062,12 @@ pub struct AgentResumeReq {
     pub session_id: String,
     pub cols: u16,
     pub rows: u16,
+    /// Optional client-supplied resume command template (Claude only). The host
+    /// substitutes `{session_id}`/`{quoted}` with the shell-quoted session id.
+    /// Not `skip_serializing_if`: postcard is positional, so skipping on encode
+    /// breaks decode symmetry when the value is `None`.
+    #[serde(default)]
+    pub launch_cmd_override: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1749,5 +1755,32 @@ mod tests {
         let encoded = postcard::to_allocvec(&session).unwrap();
         let decoded: AgentSessionSummary = postcard::from_bytes(&encoded).unwrap();
         assert_eq!(decoded, session);
+    }
+
+    #[test]
+    fn agent_resume_req_roundtrip() {
+        // With override: full template survives the wire.
+        let req = AgentResumeReq {
+            kind: ManagedAgentKind::Claude,
+            session_id: "abc-123".to_string(),
+            cols: 80,
+            rows: 24,
+            launch_cmd_override: Some("ccs glm-pro --resume {session_id}".to_string()),
+        };
+        let encoded = postcard::to_allocvec(&req).unwrap();
+        let decoded: AgentResumeReq = postcard::from_bytes(&encoded).unwrap();
+        assert_eq!(decoded, req);
+
+        // Without override: the field deserializes to None.
+        let req_none = AgentResumeReq {
+            kind: ManagedAgentKind::Claude,
+            session_id: "abc-123".to_string(),
+            cols: 80,
+            rows: 24,
+            launch_cmd_override: None,
+        };
+        let encoded = postcard::to_allocvec(&req_none).unwrap();
+        let decoded: AgentResumeReq = postcard::from_bytes(&encoded).unwrap();
+        assert_eq!(decoded, req_none);
     }
 }

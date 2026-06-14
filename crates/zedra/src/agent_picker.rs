@@ -56,8 +56,13 @@ impl AgentPicker {
             async move |this, cx| match handle.agent_installed_list(false).await {
                 Ok(agents) => {
                     let _ = this.update(cx, |this, _cx| {
-                        let available: Vec<_> =
-                            agents.into_iter().filter(|a| a.available).collect();
+                        // Keep Claude even when unavailable: the user's
+                        // `claude_command` profile typically wraps a different
+                        // CLI (e.g. `ccs`), so the host PATH probe isn't authoritative.
+                        let available: Vec<_> = agents
+                            .into_iter()
+                            .filter(|a| a.available || a.slug == "claude")
+                            .collect();
                         if available.is_empty() {
                             this.present_placeholder("No agents installed on the host.");
                             this.state = State::Idle;
@@ -92,10 +97,14 @@ impl AgentPicker {
         let launch_targets: Vec<(String, Option<String>)> = agents
             .iter()
             .map(|a| {
-                (
-                    format!("Launching {}...", a.display_name),
-                    a.launch_cmd.clone(),
-                )
+                // Claude launches through the user's profile, not the host's
+                // `claude` binary.
+                let cmd = if a.slug == "claude" {
+                    Some(crate::settings::claude_command())
+                } else {
+                    a.launch_cmd.clone()
+                };
+                (format!("Launching {}...", a.display_name), cmd)
             })
             .collect();
 

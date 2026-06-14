@@ -1,3 +1,4 @@
+use futures::StreamExt as _;
 use gpui::{prelude::FluentBuilder as _, *};
 
 use crate::fonts;
@@ -17,11 +18,23 @@ pub enum SettingsEvent {
 
 impl EventEmitter<SettingsEvent> for SettingsView {}
 
+/// Native-input results routed back to the view. The text-input callback runs on
+/// the platform thread without a GPUI context, so results go through a channel.
+#[derive(Debug)]
+enum SettingsAction {
+    /// Claude command profile edit. `None` = cancelled (no change).
+    ClaudeCommandEdited(Option<String>),
+}
+
 pub struct SettingsView {
     focus_handle: FocusHandle,
     theme_state: Entity<ThemeState>,
     sheet_state: Entity<SheetDemoState>,
     sheet_view: Entity<crate::sheet_demo_view::SheetDemoView>,
+    /// Cached Claude command profile so render stays pure (no file I/O).
+    claude_command: String,
+    action_tx: futures::channel::mpsc::UnboundedSender<SettingsAction>,
+    _action_task: Task<()>,
 }
 
 impl SettingsView {
@@ -29,11 +42,66 @@ impl SettingsView {
         let sheet_state = cx.new(|cx| SheetDemoState::new(cx));
         let sheet_view =
             cx.new(|cx| crate::sheet_demo_view::SheetDemoView::new(sheet_state.clone(), cx));
+        let claude_command = crate::settings::claude_command();
+
+        let (action_tx, mut action_rx) = futures::channel::mpsc::unbounded::<SettingsAction>();
+        let action_task = cx.spawn(async move |this, cx| {
+            while let Some(action) = action_rx.next().await {
+                if this
+                    .update(cx, |view, cx| view.process_action(action, cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
         Self {
             focus_handle: cx.focus_handle(),
             theme_state,
             sheet_state,
             sheet_view,
+            claude_command,
+            action_tx,
+            _action_task: action_task,
+        }
+    }
+
+    fn process_action(&mut self, action: SettingsAction, cx: &mut Context<Self>) {
+        match action {
+            SettingsAction::ClaudeCommandEdited(value) => {
+                // No token validation: resume appends `--resume <id>` internally.
+                let effective = crate::settings::set_claude_command(value.as_deref().unwrap_or(""));
+                self.claude_command = effective;
+                platform_bridge::trigger_haptic(HapticFeedback::ImpactLight);
+                cx.notify();
+            }
+        }
+    }
+
+    fn edit_claude_command(&self) {
+        platform_bridge::trigger_haptic(HapticFeedback::SelectionChanged);
+        let tx = self.action_tx.clone();
+        let initial = self.claude_command.clone();
+        platform_bridge::show_text_input(
+            "Claude command",
+            crate::settings::DEFAULT_CLAUDE_COMMAND,
+            &initial,
+            move |result| {
+                let _ = tx.unbounded_send(SettingsAction::ClaudeCommandEdited(result));
+            },
+        );
+    }
+
+    /// Display text for the command row: the effective profile (truncated if long).
+    fn claude_command_description(&self) -> String {
+        const MAX_CHARS: usize = 48;
+        let trimmed = self.claude_command.trim();
+        if trimmed.chars().count() <= MAX_CHARS {
+            trimmed.to_string()
+        } else {
+            let truncated: String = trimmed.chars().take(MAX_CHARS).collect();
+            format!("{truncated}…")
         }
     }
 
@@ -133,6 +201,7 @@ impl Render for SettingsView {
         let top_inset = platform_bridge::status_bar_inset();
         let bottom_inset = platform_bridge::home_indicator_inset();
         let preference = self.theme_state.read(cx).preference();
+        let command_description = self.claude_command_description();
 
         div()
             .id("settings-view")
@@ -210,6 +279,25 @@ impl Render for SettingsView {
                                     this.set_theme_preference(ThemePreference::Light, cx);
                                 }),
                             ))
+                            .child(section_header(cx, "Agent"))
+                            .child(
+                                action_row(
+                                    cx,
+                                    "settings-claude-command",
+                                    "Claude command",
+                                    &command_description,
+                                )
+                                .on_press(cx.listener(|this, _event, _window, _cx| {
+                                    this.edit_claude_command();
+                                })),
+                            )
+                            .child(
+                                div()
+                                    .text_color(rgb(theme::text_muted(cx)))
+                                    .text_size(px(theme::FONT_DETAIL))
+                                    .font_family(fonts::MONO_FONT_FAMILY)
+                                    .child("Profile used to launch and resume Claude. Resume appends --resume <session id> automatically. Leave blank to reset to the default."),
+                            )
                             .when(cfg!(debug_assertions), |section| {
                                 section
                                     .child(section_header(cx, "Developer"))
@@ -388,12 +476,7 @@ fn theme_toggle_segment(
     )
 }
 
-fn action_row(
-    cx: &App,
-    id: &'static str,
-    title: &'static str,
-    description: &'static str,
-) -> Stateful<Div> {
+fn action_row(cx: &App, id: &'static str, title: &'static str, description: &str) -> Stateful<Div> {
     div()
         .id(id)
         .min_w_0()
@@ -424,7 +507,7 @@ fn action_row(
                         .text_color(rgb(theme::text_muted(cx)))
                         .text_size(px(theme::FONT_DETAIL))
                         .font_family(fonts::MONO_FONT_FAMILY)
-                        .child(description),
+                        .child(description.to_string()),
                 ),
         )
         .child(

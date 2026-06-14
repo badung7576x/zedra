@@ -14,6 +14,14 @@ struct AppSettings {
     /// Set when the user picks a theme in Settings; `None` follows the system on next launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     theme_preference: Option<ThemePreference>,
+    /// Claude launch/resume profile, replacing the bare `claude` binary.
+    /// `None` means "use the default profile".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    claude_command: Option<String>,
+    /// Deprecated legacy resume template. Read-only migration source; cleared
+    /// on the next write so the key disappears from disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    claude_resume_command: Option<String>,
 }
 
 pub enum ThemeStateEvent {
@@ -145,6 +153,79 @@ fn write_settings(settings: &AppSettings) -> Result<(), String> {
     std::fs::write(path, contents).map_err(|e| e.to_string())
 }
 
+// ---------------------------------------------------------------------------
+// Claude command profile (launch + resume)
+// ---------------------------------------------------------------------------
+
+/// Default Claude profile when unset or cleared.
+pub const DEFAULT_CLAUDE_COMMAND: &str = "ccs glm-lite --dangerously-skip-permissions";
+
+/// Internal client/host token the host replaces with the shell-quoted session
+/// id. Never appears in the user-facing profile field.
+pub const RESUME_SESSION_ID_TOKEN: &str = "{session_id}";
+const RESUME_QUOTED_TOKEN: &str = "{quoted}";
+
+/// Resolve the effective Claude profile: the stored value, the migrated legacy
+/// resume template (one-time), or the default. Never returns empty.
+pub fn claude_command() -> String {
+    let mut settings = match read_settings() {
+        Ok(settings) => settings,
+        Err(_) => return DEFAULT_CLAUDE_COMMAND.to_string(),
+    };
+
+    if let Some(cmd) = settings.claude_command.take() {
+        let trimmed = cmd.trim().to_string();
+        return if trimmed.is_empty() {
+            DEFAULT_CLAUDE_COMMAND.to_string()
+        } else {
+            trimmed
+        };
+    }
+
+    // One-time migration: strip tokens and orphaned `--resume` from the legacy
+    // resume template, persist as `claude_command`, drop the legacy key.
+    if let Some(legacy) = settings.claude_resume_command.take() {
+        let migrated = profile_from_legacy_resume_template(&legacy);
+        settings.claude_command = Some(migrated.clone());
+        settings.claude_resume_command = None;
+        if let Err(err) = write_settings(&settings) {
+            warn!(err = %err, "settings: failed to persist migrated claude command");
+        }
+        return migrated;
+    }
+
+    DEFAULT_CLAUDE_COMMAND.to_string()
+}
+
+/// Persist the Claude profile. An empty/whitespace value resets to the default
+/// (stored as `None`). Returns the effective value for the caller to cache.
+pub fn set_claude_command(value: &str) -> String {
+    let resolved = match value.trim() {
+        "" => None,
+        trimmed => Some(trimmed.to_string()),
+    };
+    let mut settings = read_settings().unwrap_or_default();
+    settings.claude_command = resolved.clone();
+    settings.claude_resume_command = None; // clear legacy key if present
+    if let Err(err) = write_settings(&settings) {
+        warn!(err = %err, "settings: failed to save claude command");
+    }
+    resolved.unwrap_or_else(|| DEFAULT_CLAUDE_COMMAND.to_string())
+}
+
+/// Recover the launch-profile base from a legacy resume template by removing the
+/// session-id tokens and any orphaned `--resume` flag.
+fn profile_from_legacy_resume_template(template: &str) -> String {
+    let cleaned = template
+        .replace(RESUME_SESSION_ID_TOKEN, "")
+        .replace(RESUME_QUOTED_TOKEN, "");
+    cleaned
+        .split_whitespace()
+        .filter(|token| *token != "--resume")
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::ThemeState;
@@ -168,6 +249,41 @@ mod tests {
                 .ui
                 .bg_primary,
             ThemePalette::light().bg_primary
+        );
+    }
+}
+
+#[cfg(test)]
+mod claude_command_tests {
+    use super::{DEFAULT_CLAUDE_COMMAND, profile_from_legacy_resume_template};
+
+    #[test]
+    fn default_is_ccs_profile() {
+        assert_eq!(
+            DEFAULT_CLAUDE_COMMAND,
+            "ccs glm-lite --dangerously-skip-permissions"
+        );
+    }
+
+    #[test]
+    fn migration_strips_session_id_token_and_resume_flag() {
+        assert_eq!(
+            profile_from_legacy_resume_template("ccs glm-pro --resume {session_id}"),
+            "ccs glm-pro"
+        );
+        assert_eq!(
+            profile_from_legacy_resume_template(
+                "ccs glm-pro-personal --dangerously-skip-permissions --resume {quoted}"
+            ),
+            "ccs glm-pro-personal --dangerously-skip-permissions"
+        );
+    }
+
+    #[test]
+    fn migration_keeps_profile_without_token_unchanged() {
+        assert_eq!(
+            profile_from_legacy_resume_template("ccs glm-pro --dangerously-skip-permissions"),
+            "ccs glm-pro --dangerously-skip-permissions"
         );
     }
 }

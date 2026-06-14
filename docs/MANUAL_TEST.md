@@ -1067,6 +1067,38 @@ Expected:
     the header (see `docs/CONVENTIONS.md` GPUI flex width rules and
     `ui::subscreen_layout`).
 
+## 18c. Claude Command Profile (Settings)
+
+Precondition: a connected workspace; optionally an existing Claude session to resume.
+
+The profile replaces the bare `claude` binary for **both** launching a new Claude
+session and resuming one. Resume appends `--resume <session id>` automatically;
+the user never types `{session_id}`.
+
+1. Open Settings → Agent section. Expected: a `Claude command` row showing the
+   effective profile. On a fresh install (or after reset) this is the default
+   `ccs glm-lite --dangerously-skip-permissions`.
+2. Tap the row. Expected: a native text input titled `Claude command` with the
+   placeholder `ccs glm-lite --dangerously-skip-permissions` and the current
+   profile prefilled.
+3. Create Agent → pick Claude. Expected: the new Claude terminal runs the profile
+   directly (e.g. `ccs glm-lite --dangerously-skip-permissions`), not bare `claude`.
+   Claude appears in the picker even when the host has no `claude` binary.
+4. Resume a Claude session (`View sessions` or `Manage agents` → Resume).
+   Expected: the resumed terminal runs `<profile> --resume <session id>`, e.g.
+   `ccs glm-lite --dangerously-skip-permissions --resume <id>`.
+5. Confirm host-side: the spawned foreground command matches the profile; the
+   session id is shell-quoted when unsafe.
+6. Resume a Codex / OpenCode / Pi / Hermes session. Expected: byte-for-byte
+   unchanged — the profile applies to Claude only.
+7. Back in Settings, enter a custom profile (e.g.
+   `ccs glm-pro --dangerously-skip-permissions`) and confirm. Expected: the row
+   updates to the saved value (truncated with `…` if long); a light haptic fires;
+   both launch and resume now use it.
+8. Clear the field (empty) and confirm. Expected: the row resets to the default
+   `ccs glm-lite --dangerously-skip-permissions` and launch/resume use the default again.
+9. Relaunch the app. Expected: the saved value persists across launches until cleared.
+
 ## 19. Xcode Rust Build Target
 
 1. Open `ios/Zedra.xcworkspace` in Xcode

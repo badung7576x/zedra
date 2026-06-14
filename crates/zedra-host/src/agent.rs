@@ -236,6 +236,34 @@ pub fn resume_launch_command(kind: ManagedAgentKind, session_id: &str) -> Option
     Some(dispatch(kind).resume_launch_command(&shell_quote(session_id)))
 }
 
+/// Build the resume launch command, applying an optional client override
+/// template. The host owns shell-quoting either way. An override that is empty
+/// or lacks the `{session_id}`/`{quoted}` token falls back to the per-agent
+/// default so a misconfigured value cannot launch a resume that drops the id.
+pub fn resume_launch_command_with_override(
+    kind: ManagedAgentKind,
+    session_id: &str,
+    override_template: Option<&str>,
+) -> Option<String> {
+    if session_id.trim().is_empty() {
+        return None;
+    }
+    let template = override_template
+        .map(str::trim)
+        .filter(|template| template.contains("{session_id}") || template.contains("{quoted}"));
+    match template {
+        Some(template) => {
+            let quoted = shell_quote(session_id);
+            Some(
+                template
+                    .replace("{session_id}", &quoted)
+                    .replace("{quoted}", &quoted),
+            )
+        }
+        None => resume_launch_command(kind, session_id),
+    }
+}
+
 pub fn normalize_event(
     kind: ManagedAgentKind,
     event_name: &str,
@@ -955,6 +983,61 @@ mod tests {
             resume_launch_command(ManagedAgentKind::Pi, "abc-def").as_deref(),
             Some("pi --session abc-def")
         );
+    }
+
+    #[test]
+    fn override_substitutes_session_id_token() {
+        let cmd = resume_launch_command_with_override(
+            ManagedAgentKind::Claude,
+            "abc",
+            Some("ccs glm-pro --dangerously-skip-permissions --resume {session_id}"),
+        );
+        assert_eq!(
+            cmd.as_deref(),
+            Some("ccs glm-pro --dangerously-skip-permissions --resume abc")
+        );
+    }
+
+    #[test]
+    fn override_supports_quoted_alias() {
+        let cmd = resume_launch_command_with_override(
+            ManagedAgentKind::Claude,
+            "abc",
+            Some("custom resume {quoted}"),
+        );
+        assert_eq!(cmd.as_deref(), Some("custom resume abc"));
+    }
+
+    #[test]
+    fn override_quotes_unsafe_session_id() {
+        let cmd = resume_launch_command_with_override(
+            ManagedAgentKind::Claude,
+            "a'b",
+            Some("x --resume {session_id}"),
+        );
+        // Host still shell-quotes even when the client supplies the template.
+        assert_eq!(cmd.as_deref(), Some("x --resume 'a'\\''b'"));
+    }
+
+    #[test]
+    fn override_without_token_falls_back_to_default() {
+        // A template lacking the session-id token cannot be a valid resume, so the
+        // host ignores it and uses the per-agent default.
+        let cmd = resume_launch_command_with_override(
+            ManagedAgentKind::Claude,
+            "abc",
+            Some("ccs glm-pro"),
+        );
+        assert_eq!(cmd.as_deref(), Some("claude --resume abc"));
+    }
+
+    #[test]
+    fn empty_override_falls_back_to_default() {
+        let cmd = resume_launch_command_with_override(ManagedAgentKind::Claude, "abc", Some("   "));
+        assert_eq!(cmd.as_deref(), Some("claude --resume abc"));
+
+        let cmd = resume_launch_command_with_override(ManagedAgentKind::Claude, "abc", None);
+        assert_eq!(cmd.as_deref(), Some("claude --resume abc"));
     }
 
     #[test]
