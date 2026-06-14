@@ -153,6 +153,8 @@ pub struct WorkspaceState {
     pub docs_tree_collapsed_dirs: Vec<String>,
     pub created_at: u64,
     pub updated_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_token: Option<Vec<u8>>,
 
     #[serde(skip)]
     pub connect_phase: Option<ConnectPhase>,
@@ -197,6 +199,7 @@ impl PartialEq for WorkspaceState {
             && self.docs_tree_collapsed_dirs == other.docs_tree_collapsed_dirs
             && self.created_at == other.created_at
             && self.updated_at == other.updated_at
+            && self.session_token == other.session_token
     }
 }
 
@@ -459,6 +462,39 @@ impl WorkspaceState {
 
         Ok(())
     }
+
+    /// Decode stored session token to fixed-size array.
+    /// Returns None if missing, empty, or wrong length.
+    pub fn decode_session_token(&self) -> Option<[u8; 32]> {
+        self.session_token.as_ref().and_then(|v| {
+            if v.len() != 32 {
+                tracing::warn!("session_token length={}, expected 32 — discarding", v.len());
+                return None;
+            }
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(v);
+            Some(arr)
+        })
+    }
+
+    /// Persist a new session token after successful connect.
+    pub fn save_session_token(&mut self, token: [u8; 32]) {
+        if self.session_token.as_deref() == Some(&token[..]) {
+            return;
+        }
+        self.session_token = Some(token.to_vec());
+        if let Err(e) = Self::upsert(self.clone()) {
+            tracing::warn!("failed to persist session token: {e}");
+        }
+    }
+
+    /// Clear stored session token after auth failure.
+    pub fn clear_session_token(&mut self) {
+        self.session_token = None;
+        if let Err(e) = Self::upsert(self.clone()) {
+            tracing::warn!("failed to clear session token: {e}");
+        }
+    }
 }
 
 impl WorkspaceStore {
@@ -484,13 +520,38 @@ impl WorkspaceStore {
             Some(p) => p,
             None => return Err("No data directory available".to_string()),
         };
-        match serde_json::to_string_pretty(self) {
-            Ok(json) => match std::fs::write(&path, json.as_bytes()) {
-                Ok(_) => Ok(()),
-                Err(e) => Err(format!("Write error: {e}")),
-            },
-            Err(e) => Err(format!("Serialize error: {e}")),
+        let json =
+            serde_json::to_string_pretty(self).map_err(|e| format!("Serialize error: {e}"))?;
+
+        // Atomic write: write to temp file with 0o600, then rename.
+        // Prevents data loss if the process crashes mid-write.
+        let tmp_path = path.with_extension("json.tmp");
+        {
+            #[cfg(unix)]
+            {
+                use std::io::Write;
+                use std::os::unix::fs::OpenOptionsExt;
+                let mut f = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .mode(0o600)
+                    .open(&tmp_path)
+                    .map_err(|e| format!("Write error: {e}"))?;
+                f.write_all(json.as_bytes())
+                    .map_err(|e| format!("Write error: {e}"))?;
+                f.sync_all().map_err(|e| format!("Sync error: {e}"))?;
+            }
+            #[cfg(not(unix))]
+            {
+                std::fs::write(&tmp_path, json.as_bytes())
+                    .map_err(|e| format!("Write error: {e}"))?;
+            }
         }
+        std::fs::rename(&tmp_path, &path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("Rename error: {e}")
+        })
     }
 
     fn upsert(&mut self, entry: WorkspaceState) -> Result<(), String> {

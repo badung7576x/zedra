@@ -891,7 +891,7 @@ impl Connector {
         ticket: Option<&ZedraPairingTicket>,
         signer: Arc<dyn ClientSigner>,
         session_id: Option<String>,
-        session_token: Option<[u8; 32]>,
+        mut session_token: Option<[u8; 32]>,
         reason: ReconnectReason,
         max_attempts: u32,
         terminals: Option<Vec<RemoteTerminal>>,
@@ -936,6 +936,9 @@ impl Connector {
                 }
                 Err(e) => {
                     warn!("reconnect attempt {} failed: {}", attempt, e);
+                    // Token was likely consumed at the host — clear to avoid
+                    // wasting RTTs on stale token in subsequent attempts.
+                    session_token = None;
                 }
             }
         }
