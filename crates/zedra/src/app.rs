@@ -322,6 +322,9 @@ impl ZedraApp {
                 "ZedraApp: window activated, {} workspace(s)",
                 self.workspaces.read(cx).len()
             );
+            // Reconnect sessions that went idle while the app was backgrounded.
+            self.workspaces
+                .update(cx, |ws, cx| ws.reconnect_idle_on_foreground(cx));
             // Process any pending ticket (from deeplinks)
             self.process_pending_ticket_if_ready(window, cx);
         }

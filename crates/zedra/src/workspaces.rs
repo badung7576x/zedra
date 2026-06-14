@@ -419,6 +419,12 @@ impl Workspaces {
         }
     }
 
+    pub fn reconnect_idle_on_foreground(&mut self, cx: &mut Context<Self>) {
+        for entry in self.entries.clone() {
+            entry.update(cx, |ws, cx| ws.reconnect_if_idle(cx));
+        }
+    }
+
     pub fn handle_system_back(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         self.active().cloned().is_some_and(|workspace| {
             workspace.update(cx, |ws, cx| ws.handle_system_back(window, cx))

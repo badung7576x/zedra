@@ -1146,6 +1146,13 @@ impl Workspace {
         self.latency_sampler.reset();
     }
 
+    pub fn reconnect_if_idle(&mut self, cx: &mut Context<Self>) {
+        if self.session_state.read(cx).phase().is_idle() {
+            info!("foreground: session idle, triggering reconnect");
+            self.session.reconnect_stale();
+        }
+    }
+
     pub fn prepare_for_saved_removal(&mut self) {
         self.persist_workspace_state = false;
         self.session.disconnect();

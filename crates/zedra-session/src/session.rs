@@ -334,6 +334,10 @@ impl Session {
         self.handle.close_active_connection(reason);
     }
 
+    pub fn reconnect_stale(&self) {
+        self.closed_notify.notify_waiters();
+    }
+
     fn reset_abort_signal(&self) -> CancellationToken {
         let mut guard = self.abort_signal.lock().unwrap();
         guard.cancel();
