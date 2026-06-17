@@ -153,7 +153,7 @@ ALPN bump above. Migrating them is tracked in issue #140.
 
 ### 4.2 Token Resume (fast path — 1 RTT)
 
-1. `Connect(ConnectReq)` with `session_token: Some(token)` — in-memory token from last successful connect.
+1. `Connect(ConnectReq)` with `session_token: Some(token)` — token carried over from the last successful connect (persisted on both host and client, decoded from `WorkspaceState` on app open).
 2. `ConnectResult::Ok(SyncSessionResult)` — session attached immediately, fresh token issued.
 3. Normal RPCs begin after success.
 
@@ -170,10 +170,11 @@ If the client has no valid session token (first connection after restart, or tok
 
 ### 4.4 Session Token Properties
 
-- **In-memory only**: never persisted to disk. Host restart requires PKI reconnect.
+- **Persisted (7-day TTL)**: host stores the active token per session on disk and restores it on restart, skipping tokens older than `SESSION_TOKEN_TTL_SECS` (7 days). Client persists the most recent token in `WorkspaceState` and feeds it into the first connect on app open.
 - **Single-slot per session**: one token at a time, bound to the currently active client pubkey.
-- **Consumed on validation**: token is atomically removed when validated, preventing replay.
+- **Consumed on validation**: token is atomically removed when validated, preventing replay. Expired tokens are discarded (not restored); mismatched-pubkey tokens are restored.
 - **Rotated on every successful connect**: both `ConnectResult::Ok` and `AuthProveResult::Ok` return a fresh token.
+- **Cleared on auth failure**: client drops its stored token after `Unauthorized`, `InvalidSignature`, `HostSignatureInvalid`, `NotInSessionAcl`, or `SessionNotFound`, and after any failed reconnect attempt, so retries do not waste an RTT on a stale token.
 
 ### 4.5 Health
 
@@ -536,6 +537,14 @@ Any protocol-layer change must include all applicable steps:
 
 ## 11) Protocol Changelog
 
+### 2026-06-14
+
+- Session tokens now persist across restarts with a 7-day TTL.
+  - Host persists the active token per session and restores it on restart via `validate_session_token`; tokens older than `SESSION_TOKEN_TTL_SECS` (`7 * 24 * 3600`) are rejected and discarded on load. Persisted state version bumped `1 → 2` (the new `token` field is `#[serde(default)]`, so old stores load unchanged).
+  - Client persists the most recent token in `WorkspaceState.session_token` and decodes it on app open to seed the first `Connect`, enabling the 1-RTT fast path without an in-memory carry-over.
+  - Client clears the stored token on auth failures (`Unauthorized`, `InvalidSignature`, `HostSignatureInvalid`, `NotInSessionAcl`, `SessionNotFound`) and after any failed reconnect attempt to avoid wasting RTTs on a consumed/stale token.
+  - `WorkspaceState` writes are now atomic (temp file + `fsync` + `rename`, mode `0o600`) to protect the persisted credential against mid-write crashes.
+
 ### 2026-05-29
 
 - Added §2.4 Schema Evolution and Decode Compatibility: documents the postcard
@@ -614,7 +623,7 @@ Any protocol-layer change must include all applicable steps:
   - `ConnectResult::Challenge { nonce, host_signature }` — no valid token; host embeds PKI challenge inline, saving a separate challenge request RTT.
 - `AuthProveResult::Ok` now carries `SyncSessionResult` (piggybacked bootstrap); separate `SyncSession` call no longer needed at connect time.
 - Renamed the bootstrap token field to `session_token`.
-- Session token storage changed to single-slot (`Option<([u8; 32], SessionToken)>`) per session — only one token is valid at a time, consumed atomically on validation. No TTL.
+- Session token storage changed to single-slot (`Option<([u8; 32], SessionToken)>`) per session — only one token is valid at a time, consumed atomically on validation.
 - ALPN bumped to `zedra/rpc/2` (breaking change).
 
 ### 2026-03-26

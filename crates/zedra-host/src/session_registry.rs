@@ -35,6 +35,15 @@ pub const ONE_TIME_PAIRING_SLOT_TTL_SECS: u64 = 600;
 /// Session token time-to-live: 7 days.
 const TOKEN_TTL_SECS: u64 = 7 * 24 * 3600;
 
+/// Wall-clock seconds since `UNIX_EPOCH`. Falls back to 0 if the system clock
+/// precedes the epoch (defensive; not expected in practice).
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PairingSlotMode {
     OneTime,
@@ -726,10 +735,7 @@ impl SessionRegistry {
         let session_count = {
             let mut sessions = registry.sessions.lock().await;
             let mut name_index = registry.name_index.lock().await;
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
+            let now = now_unix_secs();
 
             for ps in state.sessions {
                 let session = Arc::new(ServerSession::new(
@@ -1359,10 +1365,7 @@ impl ServerSession {
     pub async fn issue_session_token(&self, client_pubkey: [u8; 32]) -> [u8; 32] {
         let mut token = [0u8; 32];
         rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut token);
-        let issued_at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+        let issued_at = now_unix_secs();
         *self.session_token.lock().await = Some((client_pubkey, SessionToken { token, issued_at }));
         token
     }
@@ -1380,10 +1383,7 @@ impl ServerSession {
         let Some((stored_pubkey, entry)) = slot.take() else {
             return false;
         };
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+        let now = now_unix_secs();
         if now > entry.issued_at + TOKEN_TTL_SECS {
             tracing::info!(
                 "rejecting expired session token (issued {}s ago)",
@@ -2447,5 +2447,115 @@ mod tests {
         assert!(!session.validate_session_token(&key_b, &token).await);
         // key_a can still use it
         assert!(session.validate_session_token(&key_a, &token).await);
+    }
+
+    #[tokio::test]
+    async fn session_token_rejects_after_ttl_expiry() {
+        let registry = SessionRegistry::new();
+        let session = create_session(&registry).await;
+        let pubkey = make_pubkey(31);
+
+        registry.add_client_to_session(&session.id, pubkey).await;
+        let token = session.issue_session_token(pubkey).await;
+
+        // Force the token to look older than the TTL.
+        {
+            let mut slot = session.session_token.lock().await;
+            if let Some((_, entry)) = slot.as_mut() {
+                entry.issued_at = now_unix_secs() - TOKEN_TTL_SECS - 1;
+            }
+        }
+
+        assert!(!session.validate_session_token(&pubkey, &token).await);
+    }
+
+    #[tokio::test]
+    async fn session_token_expired_is_discarded_not_restored() {
+        let registry = SessionRegistry::new();
+        let session = create_session(&registry).await;
+        let pubkey = make_pubkey(32);
+
+        registry.add_client_to_session(&session.id, pubkey).await;
+        let token = session.issue_session_token(pubkey).await;
+
+        {
+            let mut slot = session.session_token.lock().await;
+            if let Some((_, entry)) = slot.as_mut() {
+                entry.issued_at = now_unix_secs() - TOKEN_TTL_SECS - 1;
+            }
+        }
+
+        // Expired validation fails AND drops the slot — unlike the wrong-pubkey
+        // branch which restores it. Assert the slot directly so this pins the
+        // discard, not just the TTL rejection (an expired token never validates
+        // either way). A second validate then fails because the slot is empty.
+        assert!(!session.validate_session_token(&pubkey, &token).await);
+        assert!(session.session_token.lock().await.is_none());
+        assert!(!session.validate_session_token(&pubkey, &token).await);
+    }
+
+    #[tokio::test]
+    async fn session_token_persists_and_round_trips_through_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.json");
+
+        let issued_token;
+        let issued_pubkey = make_pubkey(41);
+        {
+            let registry = SessionRegistry::load_or_new(path.clone()).await;
+            let session = registry
+                .create_named("persisted", PathBuf::from("/persisted"))
+                .await;
+            registry
+                .add_client_to_session(&session.id, issued_pubkey)
+                .await;
+            issued_token = session.issue_session_token(issued_pubkey).await;
+            registry.save().await;
+        }
+
+        // Reload from disk: the token must survive for the same client.
+        let registry = SessionRegistry::load_or_new(path.clone()).await;
+        let sessions = registry.list_sessions().await;
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].name.as_deref(), Some("persisted"));
+        let session = registry.get_by_name("persisted").await.unwrap();
+        assert!(
+            session
+                .validate_session_token(&issued_pubkey, &issued_token)
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn session_token_expired_in_store_is_discarded_on_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.json");
+        let issued_pubkey = make_pubkey(42);
+
+        // Seed a store with a token whose issued_at predates the TTL.
+        {
+            let registry = SessionRegistry::load_or_new(path.clone()).await;
+            let session = registry
+                .create_named("stale", PathBuf::from("/stale"))
+                .await;
+            registry
+                .add_client_to_session(&session.id, issued_pubkey)
+                .await;
+            let _token = session.issue_session_token(issued_pubkey).await;
+            {
+                let mut slot = session.session_token.lock().await;
+                if let Some((_, entry)) = slot.as_mut() {
+                    entry.issued_at = now_unix_secs() - TOKEN_TTL_SECS - 1;
+                }
+            }
+            registry.save().await;
+
+            // Reload: the expired token must be dropped on load. Assert the slot
+            // directly so this pins the discard-on-load path, not just the TTL
+            // rejection inside validate (which would fail either way).
+            let reloaded = SessionRegistry::load_or_new(path.clone()).await;
+            let reloaded_session = reloaded.get_by_name("stale").await.unwrap();
+            assert!(reloaded_session.session_token.lock().await.is_none());
+        }
     }
 }

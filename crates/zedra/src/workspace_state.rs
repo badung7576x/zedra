@@ -892,6 +892,61 @@ mod tests {
     }
 
     #[test]
+    fn decode_session_token_validates_length() {
+        let _guard = set_test_data_directory("decode-session-token-length");
+
+        // None → None.
+        let mut ws = WorkspaceState {
+            endpoint_addr: "endpoint-a".into(),
+            ..Default::default()
+        };
+        assert!(ws.decode_session_token().is_none());
+
+        // Wrong length → None (and discards silently).
+        ws.session_token = Some(vec![0u8; 16]);
+        assert!(ws.decode_session_token().is_none());
+
+        // Exactly 32 bytes → Some.
+        let token = [7u8; 32];
+        ws.session_token = Some(token.to_vec());
+        assert_eq!(ws.decode_session_token(), Some(token));
+    }
+
+    #[test]
+    fn save_and_clear_session_token_persists() {
+        let _guard = set_test_data_directory("save-clear-session-token-persists");
+
+        let token = [9u8; 32];
+        let endpoint = "endpoint-token";
+        WorkspaceState::upsert(WorkspaceState {
+            endpoint_addr: endpoint.into(),
+            ..Default::default()
+        })
+        .unwrap();
+
+        // save_session_token writes through to disk.
+        {
+            let mut loaded = WorkspaceState::load().unwrap();
+            assert_eq!(loaded.len(), 1);
+            assert!(loaded[0].decode_session_token().is_none());
+            loaded[0].save_session_token(token);
+        }
+
+        let reloaded = WorkspaceState::load().unwrap();
+        assert_eq!(reloaded[0].decode_session_token(), Some(token));
+
+        // clear_session_token wipes it on disk.
+        {
+            let mut loaded = WorkspaceState::load().unwrap();
+            loaded[0].clear_session_token();
+        }
+
+        let cleared = WorkspaceState::load().unwrap();
+        assert!(cleared[0].decode_session_token().is_none());
+        assert!(cleared[0].session_token.is_none());
+    }
+
+    #[test]
     fn remove_by_endpoint_addr_persists_removal() {
         let _guard = set_test_data_directory("remove-persists-removal");
         for endpoint_addr in ["endpoint-a", "endpoint-b"] {
